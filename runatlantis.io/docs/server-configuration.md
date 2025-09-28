@@ -579,7 +579,7 @@ It's not supposed to be used with `--disable-apply-all`.
 The command `atlantis apply -p .*` will bypass the restriction and run apply on every projects.
 :::
 
-### `--enhanced-locking-backend` <Badge text="v0.31.0+" type="info"/>
+### `--enhanced-locking-backend`
 
 ```bash
 atlantis server --enhanced-locking-backend="redis"
@@ -593,7 +593,7 @@ Specify the backend type for enhanced locking. Options are:
 
 Default is `boltdb`.
 
-### `--enhanced-locking-default-timeout` <Badge text="v0.31.0+" type="info"/>
+### `--enhanced-locking-default-timeout`
 
 ```bash
 atlantis server --enhanced-locking-default-timeout="60s"
@@ -605,7 +605,7 @@ Set the default timeout for enhanced locking operations. This determines how lon
 
 Default is `30s`.
 
-### `--enhanced-locking-enabled` <Badge text="v0.31.0+" type="info"/>
+### `--enhanced-locking-enabled`
 
 ```bash
 atlantis server --enhanced-locking-enabled

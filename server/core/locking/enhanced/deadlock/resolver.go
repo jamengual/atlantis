@@ -217,8 +217,9 @@ func (adr *AutomaticDeadlockResolver) resolveWithPolicy(ctx context.Context, dea
 func (adr *AutomaticDeadlockResolver) tryFallbackResolution(ctx context.Context, deadlock *Deadlock, locks []*types.EnhancedLock, failedPolicy ResolutionPolicy, analysis *GraphAnalysis) error {
 	// Try random selection as fallback
 	if len(locks) > 0 {
-		rand.Seed(time.Now().UnixNano())
-		victim := locks[rand.Intn(len(locks))]
+		source := rand.NewSource(time.Now().UnixNano())
+		rng := rand.New(source)
+		victim := locks[rng.Intn(len(locks))]
 		adr.log.Info("Fallback resolution selected victim: %s", victim.GetID())
 		return nil
 	}

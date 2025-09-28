@@ -13,10 +13,10 @@ import (
 // This ensures the same format is used for both locking and unlocking operations.
 // The format includes the PR number: repo/PR_NUM/project/workspace
 func GenerateLockID(projCtx command.ProjectContext) string {
-	return fmt.Sprintf("%s/%d/%s/%s", 
-		projCtx.BaseRepo.FullName, 
-		projCtx.Pull.Num, 
-		projCtx.ProjectName, 
+	return fmt.Sprintf("%s/%d/%s/%s",
+		projCtx.BaseRepo.FullName,
+		projCtx.Pull.Num,
+		projCtx.ProjectName,
 		projCtx.Workspace)
 }
 

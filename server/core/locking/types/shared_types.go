@@ -90,13 +90,13 @@ type ResourceIdentifier struct {
 
 // EnhancedLockRequest represents a request for an enhanced lock
 type EnhancedLockRequest struct {
-	ID          string                 `json:"id"`
-	Resource    ResourceIdentifier     `json:"resource"`
-	Priority    Priority               `json:"priority"`
-	Timeout     time.Duration          `json:"timeout"`
-	Metadata    map[string]string      `json:"metadata,omitempty"`
-	Context     context.Context        `json:"-"`
-	RequestedAt time.Time              `json:"requested_at"`
+	ID          string             `json:"id"`
+	Resource    ResourceIdentifier `json:"resource"`
+	Priority    Priority           `json:"priority"`
+	Timeout     time.Duration      `json:"timeout"`
+	Metadata    map[string]string  `json:"metadata,omitempty"`
+	Context     context.Context    `json:"-"`
+	RequestedAt time.Time          `json:"requested_at"`
 
 	// Backward compatibility fields
 	Project   models.Project `json:"project"`
@@ -131,15 +131,15 @@ func (r *EnhancedLockRequest) GetRequestedAt() time.Time {
 
 // EnhancedLock represents an acquired lock with enhanced capabilities
 type EnhancedLock struct {
-	ID          string             `json:"id"`
-	Resource    ResourceIdentifier `json:"resource"`
-	State       LockState          `json:"state"`
-	Priority    Priority           `json:"priority"`
-	Owner       string             `json:"owner"`
-	AcquiredAt  time.Time          `json:"acquired_at"`
-	ExpiresAt   *time.Time         `json:"expires_at,omitempty"`
-	Metadata    map[string]string  `json:"metadata,omitempty"`
-	Version     int64              `json:"version"` // For optimistic locking
+	ID         string             `json:"id"`
+	Resource   ResourceIdentifier `json:"resource"`
+	State      LockState          `json:"state"`
+	Priority   Priority           `json:"priority"`
+	Owner      string             `json:"owner"`
+	AcquiredAt time.Time          `json:"acquired_at"`
+	ExpiresAt  *time.Time         `json:"expires_at,omitempty"`
+	Metadata   map[string]string  `json:"metadata,omitempty"`
+	Version    int64              `json:"version"` // For optimistic locking
 
 	// Backward compatibility - embed original lock
 	OriginalLock *models.ProjectLock `json:"original_lock,omitempty"`
