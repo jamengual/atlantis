@@ -66,7 +66,7 @@ func testBasicLockUnlockCycle(t *testing.T) {
 	// Verify lock is gone
 	locks, err = manager.List(ctx)
 	require.NoError(t, err)
-	assert.Len(t, locks, 0)
+	assert.Empty(t, locks)
 }
 
 func testConcurrentLocking(t *testing.T) {
@@ -409,7 +409,7 @@ func testRedisBackendIntegration(t *testing.T) {
 	// Verify lock exists in Redis
 	keys, err := redisClient.Keys(ctx, config.RedisKeyPrefix+"*").Result()
 	require.NoError(t, err)
-	assert.Greater(t, len(keys), 0, "Should have locks stored in Redis")
+	assert.NotEmpty(t, keys, "Should have locks stored in Redis")
 
 	// Release lock
 	releasedLock, err := manager.Unlock(ctx, project, workspace, user)
@@ -508,7 +508,7 @@ func testPerformanceUnderLoad(t *testing.T) {
 	}
 
 	// Performance assertions
-	assert.Greater(t, totalOperations, 0, "Should have completed some operations")
+	assert.Positive(t, totalOperations, "Should have completed some operations")
 
 	if totalOperations > 0 {
 		averageDuration := totalDuration / time.Duration(totalOperations)

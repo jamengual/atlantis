@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPriorityString(t *testing.T) {
@@ -44,7 +45,7 @@ func TestParsePriority(t *testing.T) {
 		t.Run(tt.input, func(t *testing.T) {
 			priority, err := ParsePriority(tt.input)
 			if tt.expectError {
-				assert.Error(t, err)
+				require.Error(t, err)
 				assert.IsType(t, &ConfigError{}, err)
 			} else {
 				assert.NoError(t, err)
@@ -100,7 +101,7 @@ func TestConfigValidation(t *testing.T) {
 		config := DefaultConfig()
 		config.Backend = "invalid"
 		err := config.Validate()
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "backend")
 	})
 
@@ -108,7 +109,7 @@ func TestConfigValidation(t *testing.T) {
 		config := DefaultConfig()
 		config.DefaultTimeout = -1
 		err := config.Validate()
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "default_timeout")
 	})
 
@@ -116,7 +117,7 @@ func TestConfigValidation(t *testing.T) {
 		config := DefaultConfig()
 		config.MaxTimeout = config.DefaultTimeout - 1
 		err := config.Validate()
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "max_timeout")
 	})
 
@@ -124,7 +125,7 @@ func TestConfigValidation(t *testing.T) {
 		config := DefaultConfig()
 		config.MaxQueueSize = 0
 		err := config.Validate()
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "max_queue_size")
 	})
 }
@@ -133,7 +134,7 @@ func TestRedisConfigValidation(t *testing.T) {
 	t.Run("empty addresses", func(t *testing.T) {
 		config := &RedisConfig{}
 		err := config.Validate()
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "addresses")
 	})
 
@@ -143,7 +144,7 @@ func TestRedisConfigValidation(t *testing.T) {
 			PoolSize:  0,
 		}
 		err := config.Validate()
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "pool_size")
 	})
 
@@ -154,7 +155,7 @@ func TestRedisConfigValidation(t *testing.T) {
 			DefaultTTL: -1,
 		}
 		err := config.Validate()
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "default_ttl")
 	})
 
