@@ -301,11 +301,11 @@ var stringFlags = map[string]stringFlag{
 	},
 	EnhancedLockingBackendFlag: {
 		description:  "Enhanced locking backend type. Options: boltdb, redis.",
-		defaultValue: "boltdb",
+		defaultValue: "",
 	},
 	EnhancedLockingDefaultTimeoutFlag: {
 		description:  "Default timeout for enhanced locking operations.",
-		defaultValue: "30s",
+		defaultValue: "",
 	},
 	ExecutableName: {
 		description:  "Comment command executable name.",
@@ -992,6 +992,16 @@ func (s *ServerCmd) setDefaults(c *server.UserConfig, v *viper.Viper) {
 	}
 	if c.AutoDiscoverModeFlag == "" {
 		c.AutoDiscoverModeFlag = DefaultAutoDiscoverMode
+	}
+
+	// Enhanced locking defaults (only when enabled)
+	if c.EnhancedLockingEnabled {
+		if c.EnhancedLockingBackend == "" {
+			c.EnhancedLockingBackend = "boltdb"
+		}
+		if c.EnhancedLockingDefaultTimeout == "" {
+			c.EnhancedLockingDefaultTimeout = "30s"
+		}
 	}
 }
 
