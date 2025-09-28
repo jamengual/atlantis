@@ -323,7 +323,7 @@ func (r *RedisBackend) RefreshLock(ctx context.Context, lockID string, extension
 		return fmt.Errorf("failed to marshal updated lock: %w", err)
 	}
 
-	ttl := int64(lock.ExpiresAt.Sub(time.Now()).Seconds())
+	ttl := int64(time.Until(*lock.ExpiresAt).Seconds())
 	err = r.client.SetEx(ctx, lockKey, string(lockData), time.Duration(ttl)*time.Second).Err()
 	if err != nil {
 		return fmt.Errorf("failed to refresh lock: %w", err)
@@ -353,7 +353,7 @@ func (r *RedisBackend) TransferLock(ctx context.Context, lockID string, newOwner
 	// Update the lock with new owner
 	var ttl time.Duration
 	if lock.ExpiresAt != nil {
-		ttl = lock.ExpiresAt.Sub(time.Now())
+		ttl = time.Until(*lock.ExpiresAt)
 	}
 
 	if ttl > 0 {

@@ -48,7 +48,7 @@ func TestParsePriority(t *testing.T) {
 				require.Error(t, err)
 				assert.IsType(t, &ConfigError{}, err)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, tt.expected, priority)
 			}
 		})

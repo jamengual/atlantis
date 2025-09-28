@@ -252,7 +252,7 @@ func testRetryMechanism(t *testing.T) {
 	duration := time.Since(start)
 
 	// Should have failed after retries
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Nil(t, lock2)
 
 	// Should have taken some time due to retries (but may be fast if error is non-retryable)
@@ -418,7 +418,7 @@ func testRedisBackendIntegration(t *testing.T) {
 
 	// Verify lock is removed from Redis
 	time.Sleep(100 * time.Millisecond) // Allow for async cleanup
-	keys, err = redisClient.Keys(ctx, config.RedisKeyPrefix+"*").Result()
+	_, err = redisClient.Keys(ctx, config.RedisKeyPrefix+"*").Result()
 	require.NoError(t, err)
 	// Keys might still exist due to queue data structures, but lock should be gone
 }
