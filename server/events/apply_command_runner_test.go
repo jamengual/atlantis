@@ -531,3 +531,138 @@ func TestApplyCommandRunner_ExecutionOrder(t *testing.T) {
 		})
 	}
 }
+
+func TestApplyCommandRunner_AllowMergeOnPartialApply(t *testing.T) {
+	logger := logging.NewNoopLogger(t)
+	RegisterMockTestingT(t)
+
+	cases := []struct {
+		Description              string
+		AllowMergeOnPartialApply bool
+		PrePopulatedProjects     []command.ProjectResult  // Projects to store in DB before apply (simulates prior plan)
+		NewApplyResults          []command.ProjectContext // Projects being applied in this run
+		ExpectedStatus           models.CommitStatus
+		ExpectedNumSuccess       int
+		ExpectedNumTotal         int
+	}{
+		{
+			Description:              "Default flag (false): partial apply shows Pending status",
+			AllowMergeOnPartialApply: false,
+			// Simulate: user planned 2 projects, now applying only 1
+			PrePopulatedProjects: []command.ProjectResult{
+				{Command: command.Plan, RepoRelDir: "dir1", Workspace: "default", ProjectCommandOutput: command.ProjectCommandOutput{PlanSuccess: &models.PlanSuccess{}}},
+				{Command: command.Plan, RepoRelDir: "dir2", Workspace: "default", ProjectCommandOutput: command.ProjectCommandOutput{PlanSuccess: &models.PlanSuccess{}}},
+			},
+			NewApplyResults: []command.ProjectContext{
+				{CommandName: command.Apply, RepoRelDir: "dir1", Workspace: "default", ProjectPlanStatus: models.PlannedPlanStatus},
+			},
+			ExpectedStatus:     models.PendingCommitStatus,
+			ExpectedNumSuccess: 1, // dir1 applied
+			ExpectedNumTotal:   2, // dir1 + dir2
+		},
+		{
+			Description:              "Flag enabled: partial apply shows Success status to allow merge",
+			AllowMergeOnPartialApply: true,
+			// Simulate: user planned 2 projects, now applying only 1
+			PrePopulatedProjects: []command.ProjectResult{
+				{Command: command.Plan, RepoRelDir: "dir1", Workspace: "default", ProjectCommandOutput: command.ProjectCommandOutput{PlanSuccess: &models.PlanSuccess{}}},
+				{Command: command.Plan, RepoRelDir: "dir2", Workspace: "default", ProjectCommandOutput: command.ProjectCommandOutput{PlanSuccess: &models.PlanSuccess{}}},
+			},
+			NewApplyResults: []command.ProjectContext{
+				{CommandName: command.Apply, RepoRelDir: "dir1", Workspace: "default", ProjectPlanStatus: models.PlannedPlanStatus},
+			},
+			ExpectedStatus:     models.SuccessCommitStatus, // With flag, partial apply shows success
+			ExpectedNumSuccess: 1,                          // dir1 applied
+			ExpectedNumTotal:   2,                          // dir1 + dir2
+		},
+		{
+			Description:              "All projects applied: always shows Success (flag=false)",
+			AllowMergeOnPartialApply: false,
+			// Simulate: user planned 1 project, now applying it
+			PrePopulatedProjects: []command.ProjectResult{
+				{Command: command.Plan, RepoRelDir: "dir1", Workspace: "default", ProjectCommandOutput: command.ProjectCommandOutput{PlanSuccess: &models.PlanSuccess{}}},
+			},
+			NewApplyResults: []command.ProjectContext{
+				{CommandName: command.Apply, RepoRelDir: "dir1", Workspace: "default", ProjectPlanStatus: models.PlannedPlanStatus},
+			},
+			ExpectedStatus:     models.SuccessCommitStatus,
+			ExpectedNumSuccess: 1,
+			ExpectedNumTotal:   1, // All applied
+		},
+		{
+			Description:              "All projects applied: always shows Success (flag=true)",
+			AllowMergeOnPartialApply: true,
+			// Simulate: user planned 1 project, now applying it
+			PrePopulatedProjects: []command.ProjectResult{
+				{Command: command.Plan, RepoRelDir: "dir1", Workspace: "default", ProjectCommandOutput: command.ProjectCommandOutput{PlanSuccess: &models.PlanSuccess{}}},
+			},
+			NewApplyResults: []command.ProjectContext{
+				{CommandName: command.Apply, RepoRelDir: "dir1", Workspace: "default", ProjectPlanStatus: models.PlannedPlanStatus},
+			},
+			ExpectedStatus:     models.SuccessCommitStatus,
+			ExpectedNumSuccess: 1,
+			ExpectedNumTotal:   1, // All applied
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.Description, func(t *testing.T) {
+			// create an empty DB
+			tmp := t.TempDir()
+			db, err := boltdb.New(tmp)
+			t.Cleanup(func() {
+				db.Close()
+			})
+			Ok(t, err)
+
+			_ = setup(t, func(tc *TestConfig) {
+				tc.allowMergeOnPartialApply = c.AllowMergeOnPartialApply
+				tc.database = db
+			})
+
+			scopeNull := metricstest.NewLoggingScope(t, logger, "atlantis")
+
+			pull := &github.PullRequest{
+				State: github.Ptr("open"),
+			}
+			modelPull := models.PullRequest{BaseRepo: testdata.GithubRepo, State: models.OpenPullState, Num: testdata.Pull.Num}
+			When(githubGetter.GetPullRequest(logger, testdata.GithubRepo, testdata.Pull.Num)).ThenReturn(pull, nil)
+			When(eventParsing.ParseGithubPull(logger, pull)).ThenReturn(modelPull, modelPull.BaseRepo, testdata.GithubRepo, nil)
+
+			// Pre-populate DB with planned projects (simulates prior `atlantis plan`)
+			if len(c.PrePopulatedProjects) > 0 {
+				_, err = db.UpdatePullWithResults(modelPull, c.PrePopulatedProjects)
+				Ok(t, err)
+			}
+
+			ctx := &command.Context{
+				User:     testdata.User,
+				Log:      logging.NewNoopLogger(t),
+				Scope:    scopeNull,
+				Pull:     modelPull,
+				HeadRepo: testdata.GithubRepo,
+				Trigger:  command.CommentTrigger,
+			}
+
+			cmd := &events.CommentCommand{Name: command.Apply}
+			When(projectCommandBuilder.BuildApplyCommands(ctx, cmd)).ThenReturn(c.NewApplyResults, nil)
+			for i := range c.NewApplyResults {
+				When(projectCommandRunner.Apply(c.NewApplyResults[i])).ThenReturn(command.ProjectCommandOutput{
+					ApplySuccess: "Success!",
+				})
+			}
+
+			applyCommandRunner.Run(ctx, cmd)
+
+			commitUpdater.VerifyWasCalledOnce().UpdateCombinedCount(
+				Any[logging.SimpleLogging](),
+				Any[models.Repo](),
+				Any[models.PullRequest](),
+				Eq[models.CommitStatus](c.ExpectedStatus),
+				Eq[command.Name](command.Apply),
+				Eq(c.ExpectedNumSuccess),
+				Eq(c.ExpectedNumTotal),
+			)
+		})
+	}
+}

@@ -65,6 +65,7 @@ var testFlags = map[string]any{
 	AutoplanModulesFromProjects:      "",
 	AllowCommandsFlag:                "version,plan,apply,unlock,import,approve_policies",
 	AllowForkPRsFlag:                 true,
+	AllowMergeOnPartialApplyFlag:     false,
 	APISecretFlag:                    "",
 	AutoDiscoverModeFlag:             "auto",
 	AutomergeFlag:                    true,

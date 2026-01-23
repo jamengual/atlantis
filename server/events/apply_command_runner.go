@@ -27,6 +27,7 @@ func NewApplyCommandRunner(
 	SilenceNoProjects bool,
 	silenceVCSStatusNoProjects bool,
 	pullReqStatusFetcher vcs.PullReqStatusFetcher,
+	allowMergeOnPartialApply bool,
 ) *ApplyCommandRunner {
 	return &ApplyCommandRunner{
 		vcsClient:                  vcsClient,
@@ -44,6 +45,7 @@ func NewApplyCommandRunner(
 		SilenceNoProjects:          SilenceNoProjects,
 		silenceVCSStatusNoProjects: silenceVCSStatusNoProjects,
 		pullReqStatusFetcher:       pullReqStatusFetcher,
+		allowMergeOnPartialApply:   allowMergeOnPartialApply,
 	}
 }
 
@@ -68,6 +70,9 @@ type ApplyCommandRunner struct {
 	// are found
 	silenceVCSStatusNoProjects bool
 	SilencePRComments          []string
+	// allowMergeOnPartialApply when true shows Success status instead of Pending
+	// for partial applies, allowing merges before all projects are applied.
+	allowMergeOnPartialApply bool
 }
 
 func (a *ApplyCommandRunner) Run(ctx *command.Context, cmd *CommentCommand) {
@@ -202,9 +207,15 @@ func (a *ApplyCommandRunner) updateCommitStatus(ctx *command.Context, pullStatus
 	if numErrored > 0 {
 		status = models.FailedCommitStatus
 	} else if numSuccess < len(pullStatus.Projects) {
-		// If there are plans that haven't been applied yet, we'll use a pending
-		// status.
-		status = models.PendingCommitStatus
+		// Partial apply: some projects not yet applied
+		if a.allowMergeOnPartialApply {
+			// User opted-in: show success to allow merge
+			ctx.Log.Debug("Partial apply with --allow-merge-on-partial-apply=true, showing success")
+			status = models.SuccessCommitStatus
+		} else {
+			// Default: show pending to block merge until all applied
+			status = models.PendingCommitStatus
+		}
 	}
 
 	if err := a.commitStatusUpdater.UpdateCombinedCount(

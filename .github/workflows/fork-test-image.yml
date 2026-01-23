@@ -1,0 +1,100 @@
+name: fork-test-image
+
+# This workflow builds and pushes test images from feature branches in forks.
+# It allows users to test changes before they are merged to the upstream repository.
+#
+# Usage:
+# 1. Push your changes to a branch in your fork
+# 2. The workflow will automatically build and push an image tagged with the branch name
+# 3. Pull the image: docker pull ghcr.io/<your-username>/atlantis:<branch-name>
+#
+# Example: ghcr.io/jamengual/atlantis:fix-gitlab-partial-apply-status
+
+on:
+  push:
+    branches:
+      - 'feature/**'
+      - 'fix/**'
+      - 'test/**'
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Custom image tag (optional, defaults to branch name)'
+        required: false
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Test Image
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    env:
+      DOCKER_REPO: ghcr.io/${{ github.repository }}
+
+    steps:
+    - name: Harden Runner
+      uses: step-security/harden-runner@20cf305ff2072d973412fa9b1e3a4f227bda3c76 # v2.14.0
+      with:
+        egress-policy: audit
+
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+    - name: Set up Go
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      with:
+        go-version-file: "go.mod"
+
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      with:
+        image: tonistiigi/binfmt:latest
+        platforms: arm64,arm
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+    - name: Determine image tag
+      id: tag
+      env:
+        INPUT_TAG: ${{ inputs.image_tag }}
+        BRANCH_REF: ${{ github.ref }}
+      run: |
+        if [ -n "${INPUT_TAG}" ]; then
+          TAG="${INPUT_TAG}"
+        else
+          # Convert branch name to valid docker tag (replace / with -)
+          TAG=$(echo "${BRANCH_REF#refs/heads/}" | sed 's/\//-/g')
+        fi
+        echo "tag=${TAG}" >> $GITHUB_OUTPUT
+        echo "Image will be tagged as: ${TAG}"
+
+    - name: Login to Packages Container registry
+      uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Build and push test image
+      uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6
+      with:
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        context: .
+        build-args: |
+          ATLANTIS_BASE_TAG_TYPE=alpine
+          ATLANTIS_VERSION=${{ steps.tag.outputs.tag }}
+          ATLANTIS_COMMIT=${{ github.sha }}
+          ATLANTIS_DATE=${{ github.event.repository.updated_at }}
+        platforms: linux/amd64
+        push: true
+        tags: |
+          ${{ env.DOCKER_REPO }}:${{ steps.tag.outputs.tag }}
+          ${{ env.DOCKER_REPO }}:${{ steps.tag.outputs.tag }}-${{ github.sha }}
+        target: alpine

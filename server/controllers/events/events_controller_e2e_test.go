@@ -1590,6 +1590,7 @@ func setupE2E(t *testing.T, repoDir string, opt setupOption) (events_controllers
 		silenceNoProjects,
 		false,
 		e2ePullReqStatusFetcher,
+		false,
 	)
 
 	approvePoliciesCommandRunner := events.NewApprovePoliciesCommandRunner(
