@@ -95,6 +95,21 @@ Atlantis will automatically run `terraform plan`
 which can run arbitrary code if given a malicious Terraform configuration.
 :::
 
+### `--allow-merge-on-partial-apply`
+
+```bash
+atlantis server --allow-merge-on-partial-apply
+# or
+ATLANTIS_ALLOW_MERGE_ON_PARTIAL_APPLY=true
+```
+
+When set to `true`, partial applies (where some projects have been applied but others
+remain) will show a "success" commit status instead of "pending". This allows merging
+PRs before all projects have been applied. Defaults to `false`.
+
+**Use case**: GitLab users experiencing [issue #2125](https://github.com/runatlantis/atlantis/issues/2125)
+where the `atlantis/apply` status stays in "running" state and blocks merges on multi-project PRs.
+
 ### `--api-secret` <Badge text="v0.22.2+" type="info"/>
 
 ```bash

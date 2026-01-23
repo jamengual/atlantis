@@ -80,6 +80,7 @@ type TestConfig struct {
 	database                   db.Database
 	DisableUnlockLabel         string
 	PendingApplyStatus         bool
+	allowMergeOnPartialApply   bool
 }
 
 func setup(t *testing.T, options ...func(testConfig *TestConfig)) *vcsmocks.MockClient {
@@ -189,6 +190,7 @@ func setup(t *testing.T, options ...func(testConfig *TestConfig)) *vcsmocks.Mock
 		testConfig.SilenceNoProjects,
 		testConfig.silenceVCSStatusNoProjects,
 		pullReqStatusFetcher,
+		testConfig.allowMergeOnPartialApply,
 	)
 
 	approvePoliciesCommandRunner = events.NewApprovePoliciesCommandRunner(

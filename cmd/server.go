@@ -163,6 +163,7 @@ const (
 	WebUsernameFlag                  = "web-username"
 	WebPasswordFlag                  = "web-password"
 	WebsocketCheckOrigin             = "websocket-check-origin"
+	AllowMergeOnPartialApplyFlag     = "allow-merge-on-partial-apply"
 
 	// NOTE: Must manually set these as defaults in the setDefaults function.
 	DefaultADBasicUser                  = ""
@@ -653,6 +654,12 @@ var boolFlags = map[string]boolFlag{
 	UseTFPluginCache: {
 		description:  "Enable the use of the Terraform plugin cache",
 		defaultValue: true,
+	},
+	AllowMergeOnPartialApplyFlag: {
+		description: "When set to true, partial applies will show a success status instead of pending, " +
+			"allowing merges before all projects are applied. " +
+			"Useful for GitLab users experiencing issue #2125 where the apply status blocks merges.",
+		defaultValue: false,
 	},
 }
 var intFlags = map[string]intFlag{
