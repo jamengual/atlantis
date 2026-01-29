@@ -140,23 +140,16 @@ func (a *APIController) Plan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	defer a.Locker.UnlockByPull(ctx.HeadRepo.FullName, ctx.Pull.Num) // nolint: errcheck
+
 	result, err := a.apiPlan(request, ctx)
 	if err != nil {
 		responder.InternalError(w, r, err)
 		return
 	}
-	defer a.Locker.UnlockByPull(ctx.HeadRepo.FullName, ctx.Pull.Num) // nolint: errcheck
 
-	// Convert to API response format
 	apiResult := NewCommandResultAPI(result, command.Plan.String())
-
-	// Determine HTTP status based on result
-	httpCode := http.StatusOK
-	if result.HasErrors() {
-		httpCode = http.StatusInternalServerError
-	}
-
-	responder.Success(w, r, httpCode, apiResult)
+	responder.Success(w, r, http.StatusOK, apiResult)
 }
 
 func (a *APIController) Apply(w http.ResponseWriter, r *http.Request) {
@@ -333,8 +326,18 @@ func (a *APIController) apiPlan(request *APIRequest, ctx *command.Context) (*com
 		ctx.Log.Warn("unable to update plan commit status: %s", err)
 	}
 
+	ctx.Log.Info("getCommands returned: cmds length=%d, cc length=%d", len(cmds), len(cc))
+
 	var projectResults []command.ProjectResult
 	for i, cmd := range cmds {
+		// Defensive check for cc array bounds
+		// Stops the panic that returns 500 error for GitLab type
+		// More work is needed to figure out why the mismatch happens in the getCommands method
+		if i >= len(cc) {
+			ctx.Log.Warn("skipping iteration %d: cc array only has %d elements, cannot access cc[%d]", i, len(cc), i)
+			continue
+		}
+
 		err = a.PreWorkflowHooksCommandRunner.RunPreHooks(ctx, cc[i])
 		if err != nil {
 			if a.FailOnPreWorkflowHookError {
@@ -347,6 +350,7 @@ func (a *APIController) apiPlan(request *APIRequest, ctx *command.Context) (*com
 
 		a.PostWorkflowHooksCommandRunner.RunPostHooks(ctx, cc[i]) // nolint: errcheck
 	}
+
 	return &command.Result{ProjectResults: projectResults}, nil
 }
 
@@ -923,12 +927,12 @@ func (a *APIController) DetectDrift(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	defer a.Locker.UnlockByPull(ctx.HeadRepo.FullName, ctx.Pull.Num) // nolint: errcheck
 	result, err := a.apiPlan(apiRequest, ctx)
 	if err != nil {
 		responder.InternalError(w, r, err)
 		return
 	}
-	defer a.Locker.UnlockByPull(ctx.HeadRepo.FullName, ctx.Pull.Num) // nolint: errcheck
 
 	// Process results and store drift data
 	detectionResult := models.NewDriftDetectionResult(request.Repository)
