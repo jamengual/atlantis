@@ -148,8 +148,14 @@ func (a *APIController) Plan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Determine HTTP status based on result
+	httpCode := http.StatusOK
+	if result.HasErrors() {
+		httpCode = http.StatusInternalServerError
+	}
+
 	apiResult := NewCommandResultAPI(result, command.Plan.String())
-	responder.Success(w, r, http.StatusOK, apiResult)
+	responder.Success(w, r, httpCode, apiResult)
 }
 
 func (a *APIController) Apply(w http.ResponseWriter, r *http.Request) {
