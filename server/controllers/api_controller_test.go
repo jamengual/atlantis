@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gorilla/mux"
 	. "github.com/petergtz/pegomock/v4"
 	"github.com/runatlantis/atlantis/server/controllers"
 	"github.com/runatlantis/atlantis/server/core/drift"
@@ -815,6 +816,7 @@ func TestAPIController_GetRemediationResult(t *testing.T) {
 	}
 
 	req, _ := http.NewRequest("GET", "/api/drift/remediate/test-id-123", nil)
+	req = mux.SetURLVars(req, map[string]string{"id": "test-id-123"})
 	req.Header.Set(atlantisTokenHeader, atlantisToken)
 	w := httptest.NewRecorder()
 	ac.GetRemediationResult(w, req)
@@ -845,6 +847,7 @@ func TestAPIController_GetRemediationResult_NotFound(t *testing.T) {
 	}
 
 	req, _ := http.NewRequest("GET", "/api/drift/remediate/nonexistent-id", nil)
+	req = mux.SetURLVars(req, map[string]string{"id": "nonexistent-id"})
 	req.Header.Set(atlantisTokenHeader, atlantisToken)
 	w := httptest.NewRecorder()
 	ac.GetRemediationResult(w, req)
@@ -897,6 +900,7 @@ func TestAPIController_GetRemediationResult_NoService(t *testing.T) {
 	}
 
 	req, _ := http.NewRequest("GET", "/api/drift/remediate/test-id", nil)
+	req = mux.SetURLVars(req, map[string]string{"id": "test-id"})
 	req.Header.Set(atlantisTokenHeader, atlantisToken)
 	w := httptest.NewRecorder()
 	ac.GetRemediationResult(w, req)
