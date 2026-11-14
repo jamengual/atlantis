@@ -35,7 +35,13 @@ type fakeStore struct {
 	// policies are the policy details by project; projects without an
 	// entry return their Policies without output.
 	policies map[webui.ProjectRef]*webui.ProjectPolicies
+	drift    webui.DriftReport
+	driftErr error
 	err      error
+}
+
+func (f *fakeStore) ListDrift(context.Context) (webui.DriftReport, error) {
+	return f.drift, f.driftErr
 }
 
 func (f *fakeStore) Capabilities() webui.Capabilities { return webui.Capabilities{} }

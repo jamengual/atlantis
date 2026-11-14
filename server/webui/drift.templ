@@ -1,0 +1,156 @@
+// Copyright 2026 The Atlantis Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package webui
+
+import "fmt"
+
+const driftCapNote = "Drift results are kept in memory on the replica that ran the detection, and are cleared when it restarts. Other replicas show only the checks they ran. Durable storage (ADR 0005) will share them."
+
+func driftStatePill(d DriftCheck) (tone, string) {
+	switch d.Status() {
+	case DriftDrifted:
+		return toneWarn, "Drifted"
+	case DriftFailed:
+		return toneBad, "Check failed"
+	}
+	return toneOK, "In sync"
+}
+
+func driftProjectTitle(d DriftCheck) string {
+	if d.Dir == "" {
+		return orUnknown(d.ProjectName)
+	}
+	return d.Dir
+}
+
+func driftRef(d DriftCheck) string {
+	if d.BaseBranch != "" && d.BaseBranch != d.Ref {
+		return d.Ref + " on " + d.BaseBranch
+	}
+	return d.Ref
+}
+
+templ driftPage(m meta, d driftData) {
+	@layout(m) {
+		<div class="head">
+			<div>
+				<h1>Drift</h1>
+				<p>Whether each project's infrastructure still matches its code, from the latest drift detection run.</p>
+			</div>
+			if d.Enabled && d.Counts.Total > 0 {
+				<div class="actions">
+					<nav class="filters" aria-label="Filter by drift status">
+						for _, f := range driftFilters {
+							<a
+								class="chip"
+								href={ m.url("/drift" + filterQuery(f.Key)) }
+								if d.Filter == f.Key {
+									aria-current="true"
+								}
+							>{ f.Label }</a>
+						}
+					</nav>
+				</div>
+			}
+		</div>
+		if !d.Enabled {
+			<section class="panel">
+				<p class="empty">Drift detection is off on this server. To use it, add drift-detection to --experiments, set --enable-drift-detection and --api-secret, then call POST /api/drift/detect on a schedule, for example from CI.</p>
+			</section>
+		} else {
+			@driftSummary(m, d.Counts, false)
+			<section class="panel" id="drift-list" hx-get={ string(m.url("/drift" + filterQuery(d.Filter))) } hx-trigger="every 30s" hx-select="#drift-list" hx-target="this" hx-swap="outerHTML">
+				<header><h2>{ itoa(len(d.Rows)) } of { itoa(d.Counts.Total) } projects</h2><span class="muted">Drifted first</span></header>
+				if d.Counts.Total == 0 {
+					<p class="empty">No drift checks yet on this replica. Call POST /api/drift/detect to check a repository; results show up here.</p>
+				} else if len(d.Rows) == 0 {
+					<p class="empty">No projects match this filter.</p>
+				} else {
+					<div class="scroll">
+						<table class="tbl">
+							<thead><tr><th>Project</th><th>Ref</th><th>Status</th><th>Changes</th><th>Last checked</th><th><span class="sr-only">Plans</span></th></tr></thead>
+							<tbody>
+								for _, row := range d.Rows {
+									@driftRowView(m, row)
+								}
+							</tbody>
+						</table>
+					</div>
+				}
+				@capabilityNote(driftCapNote)
+			</section>
+		}
+	}
+}
+
+templ driftRowView(m meta, row driftRow) {
+	{{ c := row.Check }}
+	<tr data-drift={ string(c.Status()) }>
+		<td>
+			<div class="title-cell">
+				<b>{ c.Repo.FullName }</b>
+				<span class="mono">{ driftProjectTitle(c) }</span>
+				<small>
+					workspace { orUnknown(c.Workspace) }
+					if c.ProjectName != "" && c.Dir != "" {
+						· { c.ProjectName }
+					}
+				</small>
+			</div>
+		</td>
+		<td>
+			<span class="mono">{ driftRef(c) }</span>
+			if c.Commit != "" {
+				<br/><small class="mono muted">{ shortSHA(c.Commit) }</small>
+			}
+		</td>
+		<td>
+			{{ t, label := driftStatePill(c) }}
+			@pill(t, label)
+			if c.ChangesOutside {
+				<br/><small class="policy-note">Changed outside Terraform</small>
+			}
+			if c.Error != "" {
+				<br/><small class="drift-error">{ c.Error }</small>
+			}
+		</td>
+		<td>
+			@ledger(c.Changes)
+		</td>
+		<td>
+			<span title={ c.CheckedAt.UTC().Format("2006-01-02 15:04 UTC") }>{ ago(m.Now, c.CheckedAt) }</span>
+			if row.Stale {
+				<br/>
+				@pill(toneWarn, "Stale")
+			}
+		</td>
+		<td class="right-cell">
+			<span class="rowbtns">
+				for _, p := range row.Plans {
+					<a class="btn sm" href={ templ.SafeURL(p.Href) } aria-label={ fmt.Sprintf("Plan for %s in pull request #%d", driftProjectTitle(c), p.Num) }>Plan in #{ itoa(p.Num) }</a>
+				}
+			</span>
+		</td>
+	</tr>
+}
+
+// driftSummary shows drift counts. With link set, it links to the drift page,
+// as on the overview.
+templ driftSummary(m meta, c driftCounts, link bool) {
+	<section class="panel" aria-labelledby="drift-h">
+		<header>
+			<h2 id="drift-h">Drift</h2>
+			<span class="muted">Latest check of each project on this replica</span>
+			if link {
+				<span class="right"><a class="btn sm" href={ m.url("/drift") }>Details</a></span>
+			}
+		</header>
+		<div class="strip">
+			<div class="stat"><span class="muted">Drifted</span><b class="num">{ itoa(c.Drifted) }</b></div>
+			<div class="stat"><span class="muted">Check failed</span><b class="num">{ itoa(c.Failed) }</b></div>
+			<div class="stat"><span class="muted">In sync</span><b class="num">{ itoa(c.InSync) }</b></div>
+			<div class="stat"><span class="muted">Not checked in a day</span><b class="num">{ itoa(c.Stale) }</b></div>
+		</div>
+	</section>
+}

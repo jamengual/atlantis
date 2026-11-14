@@ -363,6 +363,9 @@ type Capabilities struct {
 	// centrally, so they block commands on every replica and survive
 	// restarts.
 	SharedMaintenance bool
+	// SharedDrift is true when drift detection results are stored centrally,
+	// so every replica shows every result and they survive restarts.
+	SharedDrift bool
 }
 
 // ProjectRef identifies a project within a pull request.
@@ -406,6 +409,64 @@ type ProjectPlan struct {
 	Plan ParsedPlan
 }
 
+// DriftStatus is the outcome of a project's latest drift check.
+type DriftStatus string
+
+const (
+	// DriftDrifted means the plan found changes.
+	DriftDrifted DriftStatus = "drifted"
+	// DriftInSync means the plan found no changes.
+	DriftInSync DriftStatus = "in_sync"
+	// DriftFailed means the check failed before it could tell.
+	DriftFailed DriftStatus = "failed"
+)
+
+// DriftCheck is the latest drift detection result for one project on one
+// ref, from the drift detection API.
+type DriftCheck struct {
+	Repo        Repository
+	ProjectName string
+	Dir         string
+	Workspace   string
+	// Ref is the branch, tag, or commit that was checked.
+	Ref string
+	// BaseBranch is the branch context of a tag or commit check.
+	BaseBranch string
+	// Commit is the commit the check planned, when known.
+	Commit      string
+	DetectionID string
+	Drifted     bool
+	// ChangesOutside is true when Terraform reported changes made outside
+	// Terraform.
+	ChangesOutside bool
+	// Changes is unknown when the check failed before a plan finished.
+	Changes Changes
+	// Summary is Terraform's plan summary line, when there was one.
+	Summary   string
+	Error     string
+	CheckedAt time.Time
+}
+
+// Status is the outcome of the check. A check that found drift counts as
+// drifted even when a later step, such as a policy check, failed.
+func (c DriftCheck) Status() DriftStatus {
+	switch {
+	case c.Drifted:
+		return DriftDrifted
+	case c.Error != "":
+		return DriftFailed
+	}
+	return DriftInSync
+}
+
+// DriftReport is every drift result the store has.
+type DriftReport struct {
+	// Enabled is false when drift detection is off on this server, so
+	// there can be no results.
+	Enabled bool
+	Checks  []DriftCheck
+}
+
 // Store is the read side of the web UI.
 type Store interface {
 	Capabilities() Capabilities
@@ -424,6 +485,9 @@ type Store interface {
 	ApplyLock(ctx context.Context) (ApplyLock, error)
 	// ListMaintenance returns the active maintenance windows, oldest first.
 	ListMaintenance(ctx context.Context) []MaintenanceWindow
+	// ListDrift returns the latest drift detection result of every project
+	// and ref, drifted first.
+	ListDrift(ctx context.Context) (DriftReport, error)
 	ListJobs(ctx context.Context, f JobFilter) []Job
 	GetJob(ctx context.Context, id string) (Job, bool)
 	// JobLog streams a job's output starting after the first `from` lines,

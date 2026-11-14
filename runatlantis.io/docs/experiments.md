@@ -103,7 +103,7 @@ Results currently use in-memory storage and are lost on restart. Drift detection
 
 ## Web UI
 
-Add `web-ui` to `experiments` to serve a new web UI at `/ui`. The existing UI at `/` is unchanged. The new UI shows pull requests with per-project status and plan changes, project locks with single and bulk unlock, the global apply lock, maintenance windows, policy check results with a way for policy owners to approve them, live job logs with a way to stop a running job, and the health of the replica serving the page.
+Add `web-ui` to `experiments` to serve a new web UI at `/ui`. The existing UI at `/` is unchanged. The new UI shows pull requests with per-project status and plan changes, project locks with single and bulk unlock, the global apply lock, maintenance windows, policy check results with a way for policy owners to approve them, [drift detection results](#web-ui-drift-page), live job logs with a way to stop a running job, and the health of the replica serving the page.
 
 Without [web UI sign-in](#web-ui-sign-in), the UI uses the same access control as the existing UI: [basic auth](server-configuration.md#web-basic-auth) when enabled, and nothing otherwise. In that case anyone who can reach `/ui` can discard plans, stop jobs, start maintenance windows, and lock applies, but nobody can [approve policies](#policy-checks-and-approvals). Actions reject cross-origin requests, and pages are served with a Content Security Policy that blocks inline scripts and styles. The pull request comment for a discarded plan names the user who discarded it.
 
@@ -183,6 +183,18 @@ workflows:
 ```
 
 Atlantis uses the JSON only when it is a regular file in the project's clone that is newer than the saved plan, and reads up to 64 MB. The web UI doesn't run Terraform itself. Plan details live in the working directory of the replica that ran the plan, so other replicas show them as unavailable, and they're gone once the plan is applied or discarded or the pull request closes. When job output is no longer in memory, the change counts on pull request pages also come from this file.
+
+### Web UI drift page
+
+When [drift detection](#drift-detection) is enabled, the **Drift** page lists the latest result of every project and ref that `POST /api/drift/detect` checked: whether it drifted, the check failed, or it is in sync, the resource changes Terraform reported, the commit, and when it was checked. Drifted projects come first, and filters show only drifted, failed, in-sync, or stale projects. A check older than a day is marked stale, which usually means the schedule that calls the API stopped. When an open pull request plans the same project, a link opens that plan's [details](#web-ui-plan-details). The overview has a summary of the counts, and the navigation shows how many projects drifted.
+
+The page only reads results. Run detection the same way as before, for example from a scheduled CI job; the UI has no button to start a check, because detection runs a full plan inside the API request. Drift detection keeps no plan file, so the page shows Terraform's counts but not each resource change. Viewing the page needs the viewer role, like the other pages.
+
+::: warning
+Drift results are kept in memory on the replica that ran the detection and are lost when it restarts, as with the drift API. With several replicas, each one shows only the checks it ran. Durable storage ([ADR 0005](/contributing/adr/0005-use-durable-storage-with-one-data-model.md)) will share them.
+:::
+
+Without drift detection enabled, the page explains how to turn it on and the overview has no drift summary.
 
 ### Web UI sign-in
 

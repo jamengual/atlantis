@@ -146,6 +146,7 @@ func (h *Handler) Register(r *mux.Router) {
 	ui.Handle("/repos/{repo:.+}/pulls/{num:[0-9]+}/policies", view(h.policies)).Methods(http.MethodGet)
 	ui.Handle("/locks", view(h.locks)).Methods(http.MethodGet)
 	ui.Handle("/jobs", view(h.jobs)).Methods(http.MethodGet)
+	ui.Handle("/drift", view(h.drift)).Methods(http.MethodGet)
 	ui.Handle("/jobs/{id}", view(h.job)).Methods(http.MethodGet)
 	ui.Handle("/jobs/{id}/events", view(h.jobEvents)).Methods(http.MethodGet)
 	ui.Handle("/replica", view(h.replica)).Methods(http.MethodGet)
@@ -272,6 +273,8 @@ type loaded struct {
 	pulls []PullRequest
 	locks []Lock
 	jobs  []Job
+	// drift is set when the page read the drift results.
+	drift *DriftReport
 	have  struct{ pulls, locks, jobs bool }
 }
 
@@ -309,6 +312,11 @@ func (h *Handler) metaWith(r *http.Request, l loaded, title, nav string, crumbs 
 		m.Counts.Jobs = len(l.jobs)
 	} else {
 		m.Counts.Jobs = len(h.Store.ListJobs(ctx, JobFilter{RunningOnly: true}))
+	}
+	if l.drift != nil {
+		m.Counts.Drifted = countDrift(m.Now, l.drift.Checks).Drifted
+	} else if report, err := h.Store.ListDrift(ctx); err == nil {
+		m.Counts.Drifted = countDrift(m.Now, report.Checks).Drifted
 	}
 	return m
 }
@@ -348,9 +356,22 @@ func (h *Handler) overview(w http.ResponseWriter, r *http.Request) {
 	running := h.Store.ListJobs(ctx, JobFilter{RunningOnly: true})
 	l := loaded{pulls: pulls, locks: locks, jobs: running}
 	l.have.pulls, l.have.locks, l.have.jobs = true, true, true
+	// The overview still loads when drift results can't be read; the
+	// drift page reports the error.
+	var drift *driftCounts
+	if report, err := h.Store.ListDrift(ctx); err != nil {
+		h.Logger.Warn("web ui reading drift results for the overview: %s", err)
+	} else {
+		l.drift = &report
+		if report.Enabled {
+			c := countDrift(h.now(), report.Checks)
+			drift = &c
+		}
+	}
 	m := h.metaWith(r, l, "Overview", "overview")
 	m.Crumbs = []crumb{{Label: "Overview"}}
 	h.render(w, r, http.StatusOK, overviewPage(m, overviewData{
+		Drift:       drift,
 		Pulls:       pulls,
 		Locks:       locks,
 		Running:     running,
