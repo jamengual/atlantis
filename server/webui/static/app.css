@@ -228,3 +228,10 @@ log-view { display: block; padding: 14px; }
 .signcard .foot { font-size: 12.5px; }
 .notice { padding: 10px 12px; border-radius: var(--r-m); background: var(--accent-soft); border: 1px solid var(--rule); }
 .notice.bad { background: var(--del-soft); color: var(--ink); border-color: color-mix(in oklab, var(--del) 40%, var(--rule)); }
+
+/* roles */
+.role { font-weight: 600; }
+.role.admin { color: var(--del); }
+.role.operator { color: var(--chg); }
+.role.viewer, .role.none { color: var(--muted); }
+.role + .muted, .role + span { margin-left: .4em; }

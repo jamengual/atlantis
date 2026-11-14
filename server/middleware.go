@@ -47,7 +47,7 @@ func (l *RequestLogger) ServeHTTP(rw http.ResponseWriter, r *http.Request, next 
 		r.URL.Path == "/readyz" ||
 		r.URL.Path == "/status" ||
 		strings.HasPrefix(r.URL.Path, "/api/") ||
-		(l.webUISignIn && (r.URL.Path == "/ui" || strings.HasPrefix(r.URL.Path, "/ui/"))) {
+		(l.webUISignIn && webUISignInPath(r)) {
 		allowed = true
 	} else {
 		user, pass, ok := r.BasicAuth()
@@ -69,6 +69,24 @@ func (l *RequestLogger) ServeHTTP(rw http.ResponseWriter, r *http.Request, next 
 		next(rw, r)
 	}
 	l.logger.Debug("%s %s – respond HTTP %d", r.Method, r.URL.RequestURI(), rw.(negroni.ResponseWriter).Status())
+}
+
+// webUISignInPath reports whether web sign-in, rather than basic auth,
+// protects a request when web sign-in is on: the new UI, and the existing
+// UI's pages and actions, which redirect to it or check the access policy.
+// Everything else, such as job websockets, metrics, and profiling, keeps
+// basic auth.
+func webUISignInPath(r *http.Request) bool {
+	p := r.URL.Path
+	switch {
+	case p == "/ui" || strings.HasPrefix(p, "/ui/"):
+		return true
+	case p == "/" || p == "/index.html" || p == "/lock" || p == "/locks" || p == "/apply/lock" || p == "/apply/unlock":
+		return true
+	case strings.HasPrefix(p, "/jobs/") && strings.Count(p, "/") == 2:
+		return r.Method == http.MethodGet
+	}
+	return false
 }
 
 // credentialsMatch reports whether the supplied basic-auth credentials equal

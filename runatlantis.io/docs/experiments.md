@@ -130,6 +130,48 @@ There are two ways to sign in:
 
 Register `https://ATLANTIS_URL/ui/auth/callback/oidc` or `https://ATLANTIS_URL/ui/auth/callback/github` as the redirect URI, using your [`--atlantis-url`](server-configuration.md#atlantis-url).
 
+#### Access policy in the server-side repo config
+
+For more than a few rules, or rules that differ per repository, put the policy in the `access` section of the [server-side repo config](server-side-repo-config.md). Rules there add to the `--web-role-*` flags.
+
+```yaml
+# repos.yaml
+access:
+  roles:
+    admin:
+      - group: platform-admins          # identity provider group
+      - email: lead@acme.com            # one person
+    operator:
+      - github: acme/sre                # GitHub team (child teams count)
+      - github_user: octocat            # one GitHub user
+    viewer:
+      - domain: acme.com
+  default: none                         # anyone else is turned away
+  permissions:                          # optional; these are the defaults
+    view: viewer
+    unlock: operator
+    lock_applies: admin
+  enforce_in_pr_comments: true          # also check "atlantis unlock" comments
+
+repos:
+  - id: /.*/
+  - id: /github\.com\/acme\/prod-.*/
+    access:
+      permissions:
+        unlock: admin                   # stricter on production repos
+  - id: github.com/acme/data-lake
+    access:
+      roles:
+        operator:
+          - group: data-eng             # data-eng can unlock this repo only
+```
+
+- Each rule matches exactly one of `group`, `github` (`ORG` or `ORG/TEAM`), `github_user`, `email`, `domain`, or `everyone: true`.
+- A `repos` entry can grant extra roles for matching repositories and require a different role to unlock there. Viewing and the apply lock cover the whole server, so they are set only at the top level. When several entries match, the last one's unlock requirement wins, as with other repo settings.
+- With `enforce_in_pr_comments: true`, an `atlantis unlock` comment is checked against the same unlock rule, matching the commenter's GitHub user and teams. Identity provider groups and emails don't apply to comments.
+- When sign-in is on, the existing UI's pages redirect to the new UI, and its unlock and apply lock actions follow this policy too.
+- The **Access** page in the UI shows the policy in plain words and what you can do in each repository. Atlantis checks the policy at startup and refuses to start with mistakes such as a rule with two attributes or an unknown role.
+
 #### Microsoft Entra ID
 
 Register an application, add the redirect URI as a web platform, and create a client secret. Define app roles such as `atlantis-admins` and `atlantis-operators`, assign them to groups, and read them from the `roles` claim. App roles avoid Entra ID's group limit: when a user belongs to more than 200 groups, Entra ID leaves groups out of the token, and Atlantis turns the sign-in away with an explanation rather than guessing.

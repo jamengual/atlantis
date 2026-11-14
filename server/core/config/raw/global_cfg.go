@@ -22,6 +22,8 @@ type GlobalCfg struct {
 	Metrics        Metrics             `yaml:"metrics" json:"metrics"`
 	TeamAuthz      TeamAuthz           `yaml:"team_authz" json:"team_authz"`
 	ExternalStores ExternalStores      `yaml:"external_stores" json:"external_stores"`
+	// Access is the web UI access policy.
+	Access *Access `yaml:"access,omitempty" json:"access,omitempty"`
 }
 
 // ExternalStores is the raw schema for external storage backends.
@@ -102,6 +104,8 @@ type Repo struct {
 	CustomPolicyCheck         *bool          `yaml:"custom_policy_check,omitempty" json:"custom_policy_check,omitempty"`
 	AutoDiscover              *AutoDiscover  `yaml:"autodiscover,omitempty" json:"autodiscover,omitempty"`
 	SilencePRComments         []string       `yaml:"silence_pr_comments,omitempty" json:"silence_pr_comments,omitempty"`
+	// Access adjusts the web UI access policy for matching repos.
+	Access *RepoAccess `yaml:"access,omitempty" json:"access,omitempty"`
 }
 
 func (g GlobalCfg) Validate() error {
@@ -116,6 +120,19 @@ func (g GlobalCfg) Validate() error {
 
 	if err := g.ExternalStores.Validate(); err != nil {
 		return err
+	}
+
+	if g.Access != nil {
+		if err := g.Access.Validate(); err != nil {
+			return err
+		}
+	}
+	for _, repo := range g.Repos {
+		if repo.Access != nil {
+			if err := repo.Access.Validate(repo.ID); err != nil {
+				return err
+			}
+		}
 	}
 
 	// Check that all workflows referenced by repos are actually defined.
@@ -229,6 +246,7 @@ func (g GlobalCfg) ToValid(defaultCfg valid.GlobalCfg) valid.GlobalCfg {
 		Metrics:        g.Metrics.ToValid(),
 		TeamAuthz:      g.TeamAuthz.ToValid(),
 		ExternalStores: g.ExternalStores.ToValid(),
+		Access:         g.Access.ToValid(),
 	}
 }
 
@@ -460,5 +478,6 @@ OuterGlobalImportReqs:
 		CustomPolicyCheck:         r.CustomPolicyCheck,
 		AutoDiscover:              autoDiscover,
 		SilencePRComments:         r.SilencePRComments,
+		Access:                    r.Access.ToValid(),
 	}
 }

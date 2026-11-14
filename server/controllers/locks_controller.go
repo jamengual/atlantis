@@ -18,6 +18,7 @@ import (
 	"github.com/runatlantis/atlantis/server/events/models"
 	"github.com/runatlantis/atlantis/server/events/vcs"
 	"github.com/runatlantis/atlantis/server/logging"
+	"github.com/runatlantis/atlantis/server/webauth"
 )
 
 // LocksController handles all requests relating to Atlantis locks.
@@ -116,7 +117,7 @@ func (l *LocksController) DeleteLock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lock, err := l.DiscardLock(idUnencoded, "")
+	lock, err := l.DiscardLock(idUnencoded, webauth.FromContext(r.Context()).DisplayName())
 	if err != nil {
 		l.respond(w, logging.Error, http.StatusInternalServerError, "deleting lock failed with: '%s'", err)
 		return

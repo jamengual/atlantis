@@ -67,6 +67,8 @@ type Identity struct {
 	// Unverified emails are not used for role matching.
 	EmailVerified bool
 	Groups        []string
+	// Login is the GitHub username, set by the GitHub provider.
+	Login string
 }
 
 // Principal is the signed-in user of one request.
@@ -75,7 +77,23 @@ type Principal struct {
 	Name     string `json:"name,omitempty"`
 	Email    string `json:"email,omitempty"`
 	Provider string `json:"prv"`
-	Role     Role   `json:"role"`
+	// Role is the global role, recomputed from the policy on every request.
+	Role Role `json:"role"`
+	// Groups are the user's groups that the access policy mentions.
+	Groups []string `json:"g,omitempty"`
+	// GitHubLogin is set when the user signed in with GitHub.
+	GitHubLogin string `json:"gh,omitempty"`
+	// Base is a role held regardless of policy rules, such as the
+	// basic-auth user's when web sign-in is off. It is never stored.
+	Base Role `json:"-"`
+}
+
+// Subject is what policy rules are matched against.
+func (p *Principal) AsSubject() Subject {
+	if p == nil {
+		return Subject{}
+	}
+	return Subject{Groups: p.Groups, Email: p.Email, GitHubLogin: p.GitHubLogin}
 }
 
 // Can reports whether the principal has at least the given role.

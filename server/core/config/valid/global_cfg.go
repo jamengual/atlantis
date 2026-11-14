@@ -52,6 +52,8 @@ type GlobalCfg struct {
 	Metrics        Metrics
 	TeamAuthz      TeamAuthz
 	ExternalStores ExternalStores
+	// Access is the web UI access policy; nil when not configured.
+	Access *Access
 }
 
 // ExternalStores holds configuration for external storage backends.
@@ -115,6 +117,8 @@ type Repo struct {
 	CustomPolicyCheck         *bool
 	AutoDiscover              *AutoDiscover
 	SilencePRComments         []string
+	// Access adjusts the web UI access policy for this repo; nil when unset.
+	Access *RepoAccess
 }
 
 type MergedProjectCfg struct {

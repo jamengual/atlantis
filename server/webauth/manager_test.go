@@ -394,3 +394,24 @@ func TestNewManagerValidation(t *testing.T) {
 	_, err = webauth.NewOIDCProvider(webauth.OIDCConfig{IssuerURL: "https://x"})
 	ErrContains(t, "client ID", err)
 }
+
+// A session cookie left under the UI path by an earlier version must not
+// survive signing out.
+func TestLogoutClearsSessionUnderOldPath(t *testing.T) {
+	idp := webauthtest.NewOIDC()
+	defer idp.Server.Close()
+	idp.SetUser(map[string]any{"sub": "u", "groups": []string{"sre"}})
+	a := newApp(t, "", oidcConfig(idp, nil))
+	c := browser(t)
+	fetch(t, c, a.srv.URL+"/ui/login/oidc")
+	u, _ := url.Parse(a.srv.URL + "/ui/")
+	current := c.Jar.Cookies(u)[0]
+	// Plant the same session under /ui, as the earlier cookie path did.
+	c.Jar.SetCookies(u, []*http.Cookie{{Name: current.Name, Value: current.Value, Path: "/ui", HttpOnly: true, SameSite: http.SameSiteLaxMode}}) //nolint:gosec // test cookie on a plain-http test server
+	Equals(t, 2, len(c.Jar.Cookies(u)))
+
+	fetch(t, c, a.srv.URL+"/ui/logout")
+	Equals(t, 0, len(c.Jar.Cookies(u)))
+	_, body := fetch(t, c, a.srv.URL+"/ui")
+	Assert(t, strings.HasPrefix(body, "login page"), "still signed in after logout: %s", body)
+}

@@ -2987,3 +2987,47 @@ func TestRunCommentCommand_VarFileOutsideAllowlistRejectedForEveryCommand(t *tes
 		})
 	}
 }
+
+type fakeCommentAccess struct {
+	allow   bool
+	gotRepo string
+	gotUser string
+	gotGrps []string
+}
+
+func (f *fakeCommentAccess) EnforceInPRComments() bool       { return true }
+func (f *fakeCommentAccess) GitHubTeamRules(string) []string { return nil }
+func (f *fakeCommentAccess) AllowsCommenterUnlock(repoID, login string, groups []string) (bool, string) {
+	f.gotRepo, f.gotUser, f.gotGrps = repoID, login, groups
+	return f.allow, "admin"
+}
+
+func TestRunUnlockCommand_AccessPolicy(t *testing.T) {
+	for _, allow := range []bool{true, false} {
+		t.Run(fmt.Sprintf("allowed=%v", allow), func(t *testing.T) {
+			vcsClient := setup(t)
+			access := &fakeCommentAccess{allow: allow}
+			ch.CommentAccess = access
+			defer func() { ch.CommentAccess = nil }()
+			pull := &github.PullRequest{State: github.Ptr("open")}
+			modelPull := models.PullRequest{BaseRepo: testdata.GithubRepo, State: models.OpenPullState, Num: testdata.Pull.Num}
+			When(githubGetter.GetPullRequest(Any[logging.SimpleLogging](), Eq(testdata.GithubRepo), Eq(testdata.Pull.Num))).ThenReturn(pull, nil)
+			When(eventParsing.ParseGithubPull(Any[logging.SimpleLogging](), Eq(pull))).ThenReturn(modelPull, modelPull.BaseRepo, testdata.GithubRepo, nil)
+			When(vcsClient.GetTeamNamesForUser(Any[logging.SimpleLogging](), Eq(testdata.GithubRepo), Any[models.User]())).ThenReturn([]string{"sre"}, nil)
+
+			ch.RunCommentCommand(testdata.GithubRepo, &testdata.GithubRepo, nil, testdata.User, testdata.Pull.Num,
+				&events.CommentCommand{Name: command.Unlock})
+
+			Equals(t, testdata.GithubRepo.VCSHost.Hostname+"/"+testdata.GithubRepo.FullName, access.gotRepo)
+			Equals(t, testdata.User.Username, access.gotUser)
+			Equals(t, []string{"github:" + testdata.GithubRepo.Owner + "/sre"}, access.gotGrps)
+			if allow {
+				deleteLockCommand.VerifyWasCalledOnce().DeleteLocksByPull(Any[logging.SimpleLogging](), Eq(testdata.GithubRepo.FullName), Eq(testdata.Pull.Num))
+				return
+			}
+			deleteLockCommand.VerifyWasCalled(Never()).DeleteLocksByPull(Any[logging.SimpleLogging](), Any[string](), Any[int]())
+			vcsClient.VerifyWasCalledOnce().CreateComment(Any[logging.SimpleLogging](), Eq(testdata.GithubRepo), Eq(testdata.Pull.Num),
+				Eq(fmt.Sprintf("```\nError: User @%s does not have permission to unlock projects in this repository. Unlocking needs the admin role in Atlantis's access policy.\n```", testdata.User.Username)), Eq(""))
+		})
+	}
+}

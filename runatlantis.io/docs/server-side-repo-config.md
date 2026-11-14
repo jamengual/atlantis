@@ -668,3 +668,8 @@ mode: on_apply
 |---------|----------|---------|----------|---------------------------------------------|
 | command | string   | none    | yes      | full path to external authorization command |
 | args    | []string | none    | no       | optional arguments to pass to `command`     |
+
+## Web UI access policy
+
+The `access` section controls who can view the experimental web UI, unlock projects, and lock applies, and a `repos` entry's `access` key adjusts that for matching repositories. See [access policy](experiments.md#access-policy-in-the-server-side-repo-config) for the format and examples.
+
