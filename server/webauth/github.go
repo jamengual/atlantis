@@ -36,10 +36,12 @@ type GitHubConfig struct {
 
 // GitHubProvider signs users in with GitHub. Organizations become groups
 // named "github:org", and teams "github:org/team"; membership in a child team
-// also counts as membership in its parent team. The prefix keeps anyone who
+// also counts as membership in its parent team. Direct team memberships are
+// also reported on their own, for matching policy owners. The prefix keeps anyone who
 // registers a GitHub organization from matching another provider's group.
 type GitHubProvider struct {
 	cfg     GitHubConfig
+	host    string
 	webBase string
 	apiBase string
 }
@@ -63,7 +65,7 @@ func NewGitHubProvider(cfg GitHubConfig) (*GitHubProvider, error) {
 	if host == "" {
 		host = "github.com"
 	}
-	p := &GitHubProvider{cfg: cfg}
+	p := &GitHubProvider{cfg: cfg, host: strings.ToLower(host)}
 	switch {
 	case cfg.BaseURLOverride != "":
 		p.webBase = strings.TrimRight(cfg.BaseURLOverride, "/")
@@ -80,6 +82,9 @@ func NewGitHubProvider(cfg GitHubConfig) (*GitHubProvider, error) {
 	}
 	return p, nil
 }
+
+// Hostname is the GitHub host people sign in to, such as github.com.
+func (p *GitHubProvider) Hostname() string { return p.host }
 
 func (p *GitHubProvider) ID() string   { return "github" }
 func (p *GitHubProvider) Name() string { return "GitHub" }
@@ -170,6 +175,9 @@ func (p *GitHubProvider) Exchange(ctx context.Context, code, verifier, _, redire
 	}
 	for _, t := range teams {
 		add(GitHubGroupPrefix + t.Organization.Login)
+		if t.Organization.Login != "" && t.Slug != "" {
+			id.GitHubTeams = append(id.GitHubTeams, t.Organization.Login+"/"+t.Slug)
+		}
 		for team := &t; team != nil; team = team.Parent {
 			add(GitHubGroupPrefix + t.Organization.Login + "/" + team.Slug)
 		}

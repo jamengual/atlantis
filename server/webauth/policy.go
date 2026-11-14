@@ -28,23 +28,28 @@ const (
 	// ActionMaintenance is starting and ending maintenance windows, which
 	// freeze applies, and optionally plans, in a repository or project.
 	ActionMaintenance Action = "maintenance"
+	// ActionApprovePolicies is approving failing policy checks, as
+	// "atlantis approve_policies" does. The person must also be a policy
+	// owner in the server-side repo config.
+	ActionApprovePolicies Action = "approve_policies"
 )
 
 // Actions lists every action, in the order the UI explains them.
-var Actions = []Action{ActionView, ActionUnlock, ActionStopJob, ActionMaintenance, ActionLockApplies}
+var Actions = []Action{ActionView, ActionUnlock, ActionStopJob, ActionMaintenance, ActionApprovePolicies, ActionLockApplies}
 
 var defaultRequirements = map[Action]Role{
-	ActionView:        RoleViewer,
-	ActionUnlock:      RoleOperator,
-	ActionStopJob:     RoleOperator,
-	ActionMaintenance: RoleAdmin,
-	ActionLockApplies: RoleAdmin,
+	ActionView:            RoleViewer,
+	ActionUnlock:          RoleOperator,
+	ActionStopJob:         RoleOperator,
+	ActionMaintenance:     RoleAdmin,
+	ActionApprovePolicies: RoleOperator,
+	ActionLockApplies:     RoleAdmin,
 }
 
 // PerRepo reports whether the action is checked against a repository, so
 // that repos entries can grant it or require a different role for it.
 func (a Action) PerRepo() bool {
-	return a == ActionUnlock || a == ActionStopJob
+	return a == ActionUnlock || a == ActionStopJob || a == ActionApprovePolicies
 }
 
 // Describe says what an action lets someone do.
@@ -60,6 +65,8 @@ func (a Action) Describe() string {
 		return "Stop running plans, applies, and hooks"
 	case ActionMaintenance:
 		return "Start and end maintenance windows that freeze applies"
+	case ActionApprovePolicies:
+		return "Approve failing policy checks, for policy owners"
 	}
 	return string(a)
 }
@@ -161,6 +168,8 @@ type Policy struct {
 	requirements map[Action]Role
 	repos        []repoPolicy
 	enforcePR    bool
+	// ownerTeams are the GitHub team slugs that own policy sets.
+	ownerTeams []string
 }
 
 // PolicyConfig is the input to NewPolicy: rules from server flags, and the
@@ -169,6 +178,10 @@ type PolicyConfig struct {
 	Flags  RoleMapper
 	Access *valid.Access
 	Repos  []valid.Repo
+	// PolicyOwnerTeams are the GitHub team slugs named as policy owners,
+	// so sessions keep the direct team memberships that approving policies
+	// from the web UI checks.
+	PolicyOwnerTeams []string
 }
 
 func fromMapperRules(in []string) ([]rule, error) {
@@ -218,7 +231,7 @@ func NewPolicy(c PolicyConfig) (*Policy, error) {
 	if err := c.Flags.Validate(); err != nil {
 		return nil, err
 	}
-	p := &Policy{defaultRole: c.Flags.Default, requirements: map[Action]Role{}}
+	p := &Policy{defaultRole: c.Flags.Default, requirements: map[Action]Role{}, ownerTeams: slices.Clone(c.PolicyOwnerTeams)}
 	maps.Copy(p.requirements, defaultRequirements)
 	var err error
 	if p.roles.admin, err = fromMapperRules(c.Flags.Admins); err != nil {
@@ -244,7 +257,7 @@ func NewPolicy(c PolicyConfig) (*Policy, error) {
 		for _, req := range []struct {
 			action Action
 			value  string
-		}{{ActionView, a.Permissions.View}, {ActionUnlock, a.Permissions.Unlock}, {ActionStopJob, a.Permissions.StopJob}, {ActionMaintenance, a.Permissions.Maintenance}, {ActionLockApplies, a.Permissions.LockApplies}} {
+		}{{ActionView, a.Permissions.View}, {ActionUnlock, a.Permissions.Unlock}, {ActionStopJob, a.Permissions.StopJob}, {ActionApprovePolicies, a.Permissions.ApprovePolicies}, {ActionMaintenance, a.Permissions.Maintenance}, {ActionLockApplies, a.Permissions.LockApplies}} {
 			if req.value == "" {
 				continue
 			}
@@ -261,7 +274,7 @@ func NewPolicy(c PolicyConfig) (*Policy, error) {
 		for _, req := range []struct {
 			action Action
 			value  string
-		}{{ActionUnlock, repo.Access.Permissions.Unlock}, {ActionStopJob, repo.Access.Permissions.StopJob}} {
+		}{{ActionUnlock, repo.Access.Permissions.Unlock}, {ActionStopJob, repo.Access.Permissions.StopJob}, {ActionApprovePolicies, repo.Access.Permissions.ApprovePolicies}} {
 			if req.value == "" {
 				continue
 			}
@@ -348,6 +361,20 @@ func (p *Policy) RelevantGroups(groups []string) []string {
 	return out
 }
 
+// PolicyOwnerTeams returns the "org/team" slugs among teams whose team is
+// named as a policy owner, in any organization, so sessions only carry the
+// teams approving policies can use.
+func (p *Policy) PolicyOwnerTeams(teams []string) []string {
+	var out []string
+	for _, t := range teams {
+		_, team, ok := strings.Cut(t, "/")
+		if ok && slices.ContainsFunc(p.ownerTeams, func(o string) bool { return strings.EqualFold(o, team) }) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 // GitHubTeamRules returns the org/team names that GitHub rules mention for
 // the given org, for checking a commenter's team membership.
 func (p *Policy) GitHubTeamRules(org string) []string {
@@ -403,10 +430,11 @@ type RoleSummary struct {
 
 // RepoSummary describes one repos entry's access settings.
 type RepoSummary struct {
-	Match   string
-	Roles   []RoleSummary
-	Unlock  Role
-	StopJob Role
+	Match           string
+	Roles           []RoleSummary
+	Unlock          Role
+	StopJob         Role
+	ApprovePolicies Role
 }
 
 func summarizeRoles(r roleRules) []RoleSummary {
@@ -434,7 +462,7 @@ func (p *Policy) Summarize() Summary {
 		s.Requirements = append(s.Requirements, RequirementSummary{Action: a, Role: p.requirements[a]})
 	}
 	for _, rp := range p.repos {
-		s.Repos = append(s.Repos, RepoSummary{Match: rp.label, Roles: summarizeRoles(rp.roles), Unlock: rp.requirements[ActionUnlock], StopJob: rp.requirements[ActionStopJob]})
+		s.Repos = append(s.Repos, RepoSummary{Match: rp.label, Roles: summarizeRoles(rp.roles), Unlock: rp.requirements[ActionUnlock], StopJob: rp.requirements[ActionStopJob], ApprovePolicies: rp.requirements[ActionApprovePolicies]})
 	}
 	return s
 }

@@ -669,6 +669,8 @@ type pullData struct {
 	Locks []Lock
 	// Maintenance is the active windows in the pull request's repository.
 	Maintenance []MaintenanceWindow
+	// Approval says whether the person can approve failing policies.
+	Approval approvalView
 }
 
 templ pullPage(m meta, d pullData) {
@@ -697,6 +699,7 @@ templ pullPage(m meta, d pullData) {
 			</div>
 		</div>
 		@maintenanceBanner(m, d.Maintenance)
+		@pullPolicies(m, p, d.Approval)
 		<section class="panel" id="projects" hx-get={ string(templ.SafeURL(pullHref(m.Base, p.Repo, p.Num))) } hx-trigger="every 5s" hx-select="#projects" hx-target="this" hx-swap="outerHTML">
 			<header><h2>Projects</h2><span class="muted">{ itoa(len(p.Projects)) }</span></header>
 			<div class="scroll">
@@ -718,6 +721,9 @@ templ pullPage(m meta, d pullData) {
 								</td>
 								<td>
 									@statePill(proj.State)
+									if len(proj.Policies) > 0 {
+										<br/><small class="policy-note">@policySummaryText(proj)</small>
+									}
 								</td>
 								<td>
 									@ledger(proj.Changes)
@@ -734,6 +740,9 @@ templ pullPage(m meta, d pullData) {
 								<td class="right-cell">
 									<span class="rowbtns">
 										<a class="btn sm" href={ templ.SafeURL(planHref(m.Base, p.Repo, p.Num, proj.Ref())) } aria-label={ "Plan for " + projectLabel(proj) }>Plan</a>
+										if len(proj.Policies) > 0 {
+											<a class="btn sm" href={ templ.SafeURL(policiesHref(m.Base, p.Repo, p.Num, proj.Ref())) } aria-label={ "Policies for " + projectLabel(proj) }>Policies</a>
+										}
 										if proj.LatestJobID != "" {
 											<a class="btn sm" href={ templ.SafeURL(jobHref(m.Base, proj.LatestJobID)) }>View log</a>
 										}
@@ -1336,6 +1345,8 @@ type repoAccess struct {
 	CanUnlock  bool
 	NeedStop   webauth.Role
 	CanStop    bool
+	NeedApprove webauth.Role
+	CanApprove  bool
 }
 
 func roleLabel(r webauth.Role) string {
@@ -1388,6 +1399,7 @@ templ accessPage(m meta, d accessData) {
 						</tbody>
 					</table>
 				</div>
+				@capabilityNote("Approving policies also needs you to be a policy owner in the server-side repo config, and GitHub sign-in so Atlantis knows your GitHub login.")
 				if d.Summary.EnforcePR {
 					@capabilityNote("The same unlock rule applies to atlantis unlock comments on pull requests, matched against the commenter's GitHub user and teams.")
 				} else {
@@ -1414,7 +1426,7 @@ templ accessPage(m meta, d accessData) {
 				<header><h2>Repository rules</h2><span class="muted">Later entries win, as elsewhere in the repo config</span></header>
 				<div class="scroll">
 					<table class="tbl">
-						<thead><tr><th>Repositories</th><th>Extra roles</th><th>Unlocking needs</th><th>Stopping jobs needs</th></tr></thead>
+						<thead><tr><th>Repositories</th><th>Extra roles</th><th>Unlocking needs</th><th>Stopping jobs needs</th><th>Approving policies needs</th></tr></thead>
 						<tbody>
 							for _, rp := range d.Summary.Repos {
 								<tr>
@@ -1441,6 +1453,13 @@ templ accessPage(m meta, d accessData) {
 											@roleText(rp.StopJob)
 										}
 									</td>
+									<td>
+										if rp.ApprovePolicies == webauth.RoleNone {
+											<span class="muted">Same as everywhere</span>
+										} else {
+											@roleText(rp.ApprovePolicies)
+										}
+									</td>
 								</tr>
 							}
 						</tbody>
@@ -1453,7 +1472,7 @@ templ accessPage(m meta, d accessData) {
 				<header><h2>Your access by repository</h2><span class="muted">Repositories with pull requests or locks</span></header>
 				<div class="scroll">
 					<table class="tbl">
-						<thead><tr><th>Repository</th><th>Your role</th><th>Unlocking needs</th><th>You can unlock</th><th>Stopping jobs needs</th><th>You can stop jobs</th></tr></thead>
+						<thead><tr><th>Repository</th><th>Your role</th><th>Unlocking needs</th><th>You can unlock</th><th>Stopping jobs needs</th><th>You can stop jobs</th><th>Approving policies needs</th><th>Your role allows approving</th></tr></thead>
 						<tbody>
 							for _, ra := range d.Repos {
 								<tr>
@@ -1470,6 +1489,14 @@ templ accessPage(m meta, d accessData) {
 									<td>@roleText(ra.NeedStop)</td>
 									<td>
 										if ra.CanStop {
+											@pill(toneOK, "Yes")
+										} else {
+											@pill(toneNeutral, "No")
+										}
+									</td>
+									<td>@roleText(ra.NeedApprove)</td>
+									<td>
+										if ra.CanApprove {
 											@pill(toneOK, "Yes")
 										} else {
 											@pill(toneNeutral, "No")

@@ -32,6 +32,9 @@ type fakeStore struct {
 	liveLogs map[string]chan webui.LogLine
 	plans    map[webui.ProjectRef]*webui.ProjectPlan
 	maint    []webui.MaintenanceWindow
+	// policies are the policy details by project; projects without an
+	// entry return their Policies without output.
+	policies map[webui.ProjectRef]*webui.ProjectPolicies
 	err      error
 }
 
@@ -62,6 +65,22 @@ func (f *fakeStore) GetPlan(ctx context.Context, repo webui.Repository, num int,
 		}
 	}
 	return nil, f.err
+}
+func (f *fakeStore) GetPolicies(ctx context.Context, repo webui.Repository, num int, ref webui.ProjectRef) (*webui.ProjectPolicies, error) {
+	p, err := f.GetPull(ctx, repo, num)
+	if p == nil {
+		return nil, err
+	}
+	for _, proj := range p.Projects {
+		if proj.Ref() != ref {
+			continue
+		}
+		if pp, ok := f.policies[ref]; ok {
+			return pp, nil
+		}
+		return &webui.ProjectPolicies{Sets: proj.Policies, Output: webui.PolicyOutputMissing}, nil
+	}
+	return nil, nil
 }
 func (f *fakeStore) ListLocks(context.Context) ([]webui.Lock, error)    { return f.locks, f.err }
 func (f *fakeStore) ApplyLock(context.Context) (webui.ApplyLock, error) { return f.apply, nil }
@@ -119,6 +138,19 @@ type fakeActions struct {
 	startErr error
 	ended    []string
 	store    *fakeStore
+	// approvals records ApprovePolicies requests.
+	approvals  []webui.PolicyApprovalRequest
+	approveErr error
+}
+
+func (f *fakeActions) ApprovePolicies(req webui.PolicyApprovalRequest) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.approveErr != nil {
+		return f.approveErr
+	}
+	f.approvals = append(f.approvals, req)
+	return nil
 }
 
 func (f *fakeActions) StartMaintenance(req webui.MaintenanceRequest, actor string) (webui.MaintenanceWindow, error) {

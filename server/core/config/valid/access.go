@@ -47,4 +47,7 @@ type AccessPermissions struct {
 	LockApplies string
 	StopJob     string
 	Maintenance string
+	// ApprovePolicies is the role needed to approve failing policies from
+	// the web UI, on top of being a policy owner.
+	ApprovePolicies string
 }

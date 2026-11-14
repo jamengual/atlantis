@@ -38,6 +38,7 @@ access:
     unlock: Admin
     stop_job: Admin
     maintenance: Operator
+    approve_policies: Admin
     lock_applies: admin
   enforce_in_pr_comments: true
 repos:
@@ -50,6 +51,7 @@ repos:
       permissions:
         unlock: operator
         stop_job: operator
+        approve_policies: viewer
 `)
 	Ok(t, err)
 	Assert(t, cfg.Access != nil, "access section was not parsed")
@@ -59,7 +61,7 @@ repos:
 		Viewer:   []valid.AccessRule{{Domain: "acme.com"}, {Everyone: true}},
 	}, cfg.Access.Roles)
 	Equals(t, "none", cfg.Access.Default)
-	Equals(t, valid.AccessPermissions{Unlock: "admin", LockApplies: "admin", StopJob: "admin", Maintenance: "operator"}, cfg.Access.Permissions)
+	Equals(t, valid.AccessPermissions{Unlock: "admin", LockApplies: "admin", StopJob: "admin", Maintenance: "operator", ApprovePolicies: "admin"}, cfg.Access.Permissions)
 	Equals(t, true, cfg.Access.EnforceInPRComments)
 
 	repo := cfg.MatchingRepo("github.com/acme/data-lake")
@@ -67,6 +69,7 @@ repos:
 	Equals(t, []valid.AccessRule{{Group: "data-eng"}}, repo.Access.Roles.Operator)
 	Equals(t, "operator", repo.Access.Permissions.Unlock)
 	Equals(t, "operator", repo.Access.Permissions.StopJob)
+	Equals(t, "viewer", repo.Access.Permissions.ApprovePolicies)
 }
 
 func TestParseGlobalCfg_NoAccess(t *testing.T) {
@@ -95,6 +98,10 @@ func TestParseGlobalCfg_AccessErrors(t *testing.T) {
 		"maintenance needs none":      {"access:\n  permissions:\n    maintenance: none\n", "access.permissions.maintenance: an action can't require the none role"},
 		"unknown maintenance role":    {"access:\n  permissions:\n    maintenance: root\n", "access.permissions.maintenance: unknown role"},
 		"per-repo maintenance":        {"repos:\n  - id: /.*/\n    access:\n      permissions:\n        maintenance: operator\n", "maintenance windows are managed for every repo"},
+		"approve policies needs none": {"access:\n  permissions:\n    approve_policies: none\n", "access.permissions.approve_policies: an action can't require the none role"},
+		"unknown approve role":        {"access:\n  permissions:\n    approve_policies: root\n", "access.permissions.approve_policies: unknown role"},
+		"per-repo approve none":       {"repos:\n  - id: /.*/\n    access:\n      permissions:\n        approve_policies: none\n", "permissions.approve_policies: an action can't require the none role"},
+		"per-repo approve unknown":    {"repos:\n  - id: /.*/\n    access:\n      permissions:\n        approve_policies: boss\n", "permissions.approve_policies: unknown role"},
 		"unknown key":                 {"access:\n  roles:\n    admin:\n      - team: x\n", "team"},
 	}
 	for name, tc := range cases {

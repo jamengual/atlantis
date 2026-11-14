@@ -133,6 +133,18 @@ func (m *Manager) Policy() *Policy { return m.cfg.Policy }
 // UsesProxy reports whether identities come from an authenticating proxy.
 func (m *Manager) UsesProxy() bool { return m.cfg.Proxy != nil }
 
+// GitHubHostname is the host of the GitHub sign-in provider, or empty when
+// people can't sign in with GitHub. Logins of people who signed in with
+// GitHub are logins on this host.
+func (m *Manager) GitHubHostname() string {
+	for _, p := range m.cfg.Providers {
+		if gh, ok := p.(*GitHubProvider); ok {
+			return gh.Hostname()
+		}
+	}
+	return ""
+}
+
 // Providers lists the sign-in buttons.
 func (m *Manager) Providers() []ProviderInfo {
 	out := make([]ProviderInfo, 0, len(m.cfg.Providers))
@@ -174,12 +186,14 @@ func (m *Manager) principal(id Identity, provider string) *Principal {
 		id.Groups = slices.DeleteFunc(slices.Clone(id.Groups), func(g string) bool {
 			return strings.HasPrefix(strings.ToLower(g), GitHubGroupPrefix)
 		})
+		id.GitHubTeams = nil
 	}
 	p := &Principal{Subject: id.Subject, Name: id.Name, Provider: provider, GitHubLogin: id.Login}
 	if id.EmailVerified {
 		p.Email = id.Email
 	}
 	p.Groups = m.cfg.Policy.RelevantGroups(id.Groups)
+	p.GitHubTeams = m.cfg.Policy.PolicyOwnerTeams(id.GitHubTeams)
 	p.Role = m.cfg.Policy.GlobalRole(p.AsSubject())
 	return p
 }

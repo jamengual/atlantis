@@ -415,3 +415,61 @@ func TestLogoutClearsSessionUnderOldPath(t *testing.T) {
 	_, body := fetch(t, c, a.srv.URL+"/ui")
 	Assert(t, strings.HasPrefix(body, "login page"), "still signed in after logout: %s", body)
 }
+
+func TestGitHubHostname(t *testing.T) {
+	for host, want := range map[string]string{"": "github.com", "GitHub.Acme.Internal": "github.acme.internal", "acme.ghe.com": "acme.ghe.com"} {
+		p := mustGitHub(t, webauth.GitHubConfig{ClientID: "id", ClientSecret: "s", Hostname: host, AllowedOrgs: []string{"acme"}})
+		Equals(t, want, p.Hostname())
+		public, _ := url.Parse("https://atlantis.acme.com")
+		m, err := webauth.NewManager(webauth.Config{PublicURL: public, SessionSecrets: []string{secretA}, Providers: []webauth.LoginProvider{p}, Roles: webauth.RoleMapper{Default: webauth.RoleViewer}})
+		Ok(t, err)
+		Equals(t, want, m.GitHubHostname())
+	}
+	// Without GitHub sign-in, nobody has a GitHub login.
+	oidc := webauthtest.NewOIDC()
+	defer oidc.Server.Close()
+	a := newApp(t, "", func(*url.URL) webauth.Config {
+		p, err := webauth.NewOIDCProvider(webauth.OIDCConfig{IssuerURL: oidc.Server.URL, ClientID: oidc.ClientID, ClientSecret: oidc.ClientSecret})
+		Ok(t, err)
+		return webauth.Config{SessionSecrets: []string{secretA}, Providers: []webauth.LoginProvider{p}, Roles: webauth.RoleMapper{Default: webauth.RoleViewer}}
+	})
+	Equals(t, "", a.m.GitHubHostname())
+}
+
+// Sessions keep the policy owner teams a GitHub user is a direct member of;
+// a child team doesn't add its parent, unlike for groups.
+func TestGitHub_SessionKeepsDirectOwnerTeams(t *testing.T) {
+	gh := webauthtest.NewGitHub()
+	defer gh.Server.Close()
+	gh.SetUser(
+		map[string]any{"id": 42, "login": "octo"}, nil,
+		[]map[string]any{{"login": "acme"}},
+		[]map[string]any{
+			{"slug": "sec-oncall", "organization": map[string]any{"login": "acme"}, "parent": map[string]any{"slug": "sec"}},
+			{"slug": "finops", "organization": map[string]any{"login": "acme"}},
+			{"slug": "web", "organization": map[string]any{"login": "acme"}},
+		},
+	)
+	a := newApp(t, "", func(u *url.URL) webauth.Config {
+		cfg := githubConfig(gh, []string{"acme"})(u)
+		policy, err := webauth.NewPolicy(webauth.PolicyConfig{
+			Flags:            webauth.RoleMapper{Operators: []string{"github:acme/sec"}},
+			PolicyOwnerTeams: []string{"sec", "finops"},
+		})
+		Ok(t, err)
+		cfg.Policy = policy
+		return cfg
+	})
+	c := browser(t)
+	_, body := fetch(t, c, a.srv.URL+"/ui/login/github")
+	// The child team still counts for the parent team in access rules.
+	Assert(t, strings.Contains(body, "role=operator"), body)
+	req := httptest.NewRequest(http.MethodGet, a.srv.URL+"/ui", nil)
+	u, _ := url.Parse(a.srv.URL)
+	for _, ck := range c.Jar.Cookies(u) {
+		req.AddCookie(ck)
+	}
+	p := a.m.Authenticate(req)
+	Assert(t, p != nil, "not signed in")
+	Equals(t, []string{"acme/finops"}, p.GitHubTeams)
+}

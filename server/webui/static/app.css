@@ -315,3 +315,12 @@ textarea { font: inherit; color: inherit; }
   .maint-form { grid-template-columns: minmax(0, 1fr); }
   .maint-form .check, .maint-form .hint, .maint-form .btn { grid-column: 1; }
 }
+
+/* policy checks */
+.btn.solid { background: var(--accent); color: var(--surface); border-color: var(--accent); }
+details.confirm.approve[open] > summary { background: var(--accent-soft); }
+.policy-note { color: var(--muted); }
+.policy-set > header h2 { overflow-wrap: anywhere; }
+.policy-output { margin: 0 14px 14px; }
+.policy-output > summary { cursor: pointer; color: var(--muted); padding: 4px 0; }
+.policy-output .snippet { margin: 6px 0 0; max-height: 28em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
