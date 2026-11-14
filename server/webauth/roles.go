@@ -13,6 +13,7 @@ import (
 // Each rule is one of:
 //   - "*": anyone who signed in
 //   - "group:NAME" or a bare "NAME": a group the provider reports
+//   - "github:ORG" or "github:ORG/TEAM": a GitHub organization or team
 //   - "email:ADDRESS": a verified email address
 //   - "domain:example.com": any verified email in that domain
 //
@@ -81,11 +82,14 @@ func parseRule(rule string) (kind, value string, err error) {
 	if value == "" {
 		return "", "", fmt.Errorf("rule %q has no value", rule)
 	}
+	if kind == "github" {
+		return "group", GitHubGroupPrefix + value, nil
+	}
 	switch kind {
 	case "group", "email", "domain":
 		return kind, value, nil
 	}
-	return "", "", fmt.Errorf("rule %q: unknown kind %q; use group:, email:, domain:, or *", rule, kind)
+	return "", "", fmt.Errorf("rule %q: unknown kind %q; use group:, github:, email:, domain:, or *", rule, kind)
 }
 
 func matches(kind, value string, id Identity) bool {

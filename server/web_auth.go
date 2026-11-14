@@ -40,7 +40,7 @@ func newWebAuth(c UserConfig, publicURL *url.URL, logger logging.SimpleLogging) 
 		return nil, errors.New("web sign-in has no role rules, so nobody could use the UI; set web-role-admins, web-role-operators, web-role-viewers, or web-role-default")
 	}
 
-	lifetime := 8 * time.Hour
+	lifetime := webauth.DefaultSessionLifetime
 	if c.WebSessionLifetime != "" {
 		lifetime, err = time.ParseDuration(c.WebSessionLifetime)
 		if err != nil || lifetime <= 0 {

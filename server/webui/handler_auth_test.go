@@ -267,3 +267,36 @@ func TestProxySignIn(t *testing.T) {
 	resp.Body.Close()
 	Equals(t, http.StatusNotFound, resp.StatusCode)
 }
+
+// Internal sign-in failures show a reference, not provider responses or
+// internal hosts, and sign-in pages are never cached.
+func TestSignIn_InternalErrorsAreNotShown(t *testing.T) {
+	idp := webauthtest.NewOIDC()
+	defer idp.Server.Close()
+	idp.SetUser(map[string]any{"sub": "u", "groups": []string{"sre"}})
+	var handler http.Handler
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handler.ServeHTTP(w, r) }))
+	defer srv.Close()
+	public, _ := url.Parse(srv.URL)
+	// A wrong client secret makes the token exchange fail inside Atlantis.
+	provider, err := webauth.NewOIDCProvider(webauth.OIDCConfig{IssuerURL: idp.Server.URL, ClientID: idp.ClientID, ClientSecret: "wrong"})
+	Ok(t, err)
+	auth, err := webauth.NewManager(webauth.Config{PublicURL: public, SessionSecrets: []string{sessionSecret}, Providers: []webauth.LoginProvider{provider}, Roles: signInRoles, Logger: logging.NewNoopLogger(t)})
+	Ok(t, err)
+	h := &webui.Handler{Store: sampleStore(), Actions: &fakeActions{}, Logger: logging.NewNoopLogger(t), Auth: auth}
+	r := mux.NewRouter()
+	h.Register(r)
+	handler = r
+
+	b := newBrowser(t, srv.URL)
+	resp, err := b.Get(srv.URL + "/ui/login/oidc")
+	Ok(t, err)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	Equals(t, http.StatusForbidden, resp.StatusCode)
+	Equals(t, "no-store", resp.Header.Get("Cache-Control"))
+	assertContains(t, string(body), "give your Atlantis administrator this reference")
+	for _, leak := range []string{"invalid_client", idp.Server.URL, "oauth2"} {
+		Assert(t, !strings.Contains(string(body), leak), "sign-in page leaked %q", leak)
+	}
+}

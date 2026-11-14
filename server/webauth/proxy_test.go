@@ -71,7 +71,8 @@ func TestProxyALB(t *testing.T) {
 	req.Header.Set("x-amzn-oidc-data", albToken(t, good, "key-1", albARN, userClaims))
 	id, err := p.Authenticate(req)
 	Ok(t, err)
-	Equals(t, webauth.Identity{Subject: "alb:abc", Name: "Maya", Email: "maya@acme.com", EmailVerified: true, Groups: []string{"sre"}}, id)
+	// No email_verified claim: the email is shown but not trusted for roles.
+	Equals(t, webauth.Identity{Subject: "alb:abc", Name: "Maya", Email: "maya@acme.com", EmailVerified: false, Groups: []string{"sre"}}, id)
 
 	cases := map[string]string{
 		"signed by another load balancer": albToken(t, good, "key-1", strings.Replace(albARN, "atlantis", "other", 1), userClaims),

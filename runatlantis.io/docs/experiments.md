@@ -121,7 +121,7 @@ Web UI sign-in replaces basic auth for the pages at `/ui` with your identity pro
 | Operator | Also discard plans and unlock projects |
 | Admin | Also lock and unlock applies for every repository |
 
-Roles come from [`--web-role-admins`](server-configuration.md#web-role-admins), [`--web-role-operators`](server-configuration.md#web-role-operators), and [`--web-role-viewers`](server-configuration.md#web-role-viewers). Each rule is `group:NAME` (or a bare `NAME`), `email:ADDRESS`, `domain:example.com`, or `*` for everyone who signed in. The highest matching role wins. People who match no rule are turned away unless you set [`--web-role-default`](server-configuration.md#web-role-default). Atlantis refuses to start with sign-in enabled and no role rules.
+Roles come from [`--web-role-admins`](server-configuration.md#web-role-admins), [`--web-role-operators`](server-configuration.md#web-role-operators), and [`--web-role-viewers`](server-configuration.md#web-role-viewers). Each rule is `group:NAME` (or a bare `NAME`) for your identity provider's groups, `github:ORG` or `github:ORG/TEAM` for GitHub, `email:ADDRESS`, `domain:example.com`, or `*` for everyone who signed in. Email and domain rules only match emails the provider marks as verified. The highest matching role wins. People who match no rule are turned away unless you set [`--web-role-default`](server-configuration.md#web-role-default). Atlantis refuses to start with sign-in enabled and no role rules.
 
 There are two ways to sign in:
 
@@ -170,16 +170,16 @@ Use the provider's issuer URL and configure it to send groups. Okta needs a grou
 
 #### GitHub
 
-Create a GitHub OAuth app, or use a GitHub App with user authorization, with the callback URL. Organizations become groups named `ORG` and teams become `ORG/TEAM`; a child team's members also count as members of its parent team. GitHub Enterprise uses [`--gh-hostname`](server-configuration.md#gh-hostname).
+Create a GitHub OAuth app, or use a GitHub App with user authorization, with the callback URL. [`--web-github-allowed-orgs`](server-configuration.md#web-github-allowed-orgs) is required, because anyone can create a GitHub account. Organizations become groups named `github:ORG` and teams become `github:ORG/TEAM`; a child team's members also count as members of its parent team. The `github:` prefix keeps a GitHub organization from matching a group of the same name from another provider. GitHub Enterprise uses [`--gh-hostname`](server-configuration.md#gh-hostname).
 
 ```sh
 ATLANTIS_WEB_SSO_PROVIDERS=github
 ATLANTIS_WEB_GITHUB_CLIENT_ID=...
 ATLANTIS_WEB_GITHUB_CLIENT_SECRET=...
 ATLANTIS_WEB_GITHUB_ALLOWED_ORGS=acme
-ATLANTIS_WEB_ROLE_ADMINS=acme/platform
-ATLANTIS_WEB_ROLE_OPERATORS=acme/sre
-ATLANTIS_WEB_ROLE_VIEWERS=acme
+ATLANTIS_WEB_ROLE_ADMINS=github:acme/platform
+ATLANTIS_WEB_ROLE_OPERATORS=github:acme/sre
+ATLANTIS_WEB_ROLE_VIEWERS=github:acme
 ```
 
 `--web-sso-providers=oidc,github` shows both buttons.
@@ -194,7 +194,7 @@ ATLANTIS_WEB_PROXY_ALB_ARN=arn:aws:elasticloadbalancing:us-east-1:123456789012:l
 ATLANTIS_WEB_ROLE_VIEWERS=domain:acme.com
 ```
 
-Atlantis checks the signature with the region's public key and that the header was signed by this load balancer.
+Atlantis checks the signature with the region's public key and that the header was signed by this load balancer. Every listener rule that forwards to Atlantis must authenticate users; otherwise a header issued for another application behind the same load balancer could be replayed. Atlantis trusts the email only when the identity provider sends `email_verified: true`.
 
 #### Google Cloud Identity-Aware Proxy
 
@@ -206,7 +206,7 @@ ATLANTIS_WEB_ROLE_VIEWERS=domain:acme.com
 
 #### oauth2-proxy, Pomerium, and other proxies
 
-Have the proxy pass the user, email, and groups in headers, and tell Atlantis which networks the proxy connects from. Atlantis checks the connection's address, not `X-Forwarded-For`, so other clients can't set these headers.
+Have the proxy pass the user, email, and groups in headers, and tell Atlantis which networks the proxy connects from. Atlantis checks the connection's address, not `X-Forwarded-For`, so other clients can't set these headers. Anything else that can connect from those networks can also set them, so keep the networks narrow; Atlantis rejects networks broader than `/8` for IPv4 or `/16` for IPv6.
 
 ```sh
 ATLANTIS_WEB_PROXY_AUTH=header
@@ -218,7 +218,9 @@ ATLANTIS_WEB_PROXY_TRUSTED_CIDRS=10.0.0.0/8
 
 #### Sessions and auditing
 
-A sign-in lasts [`--web-session-lifetime`](server-configuration.md#web-session-lifetime), 8 hours by default. Signing out clears the session in that browser. To end every session at once, replace all session secrets and restart. Sign-ins, sign-outs, denials, and every action are logged with the user, provider, and role; discarded-plan comments on pull requests name the user.
+A sign-in lasts [`--web-session-lifetime`](server-configuration.md#web-session-lifetime), 4 hours by default. The role is decided at sign-in and kept for the whole session, so someone removed from a group keeps their role until the session ends. Signing out clears the session in that browser only. To end every session at once, for example after removing an administrator, replace all session secrets and restart. Session cookies are `Secure` unless Atlantis runs on `localhost` over plain http.
+
+Sign-ins, sign-outs, denials, and every action are logged with the user, provider, and role; discarded-plan comments on pull requests name the user. When a sign-in fails for a reason the user can't fix, the page shows a short reference that matches the detailed log entry.
 
 ### Web UI graduation checklist
 

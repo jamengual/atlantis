@@ -5,6 +5,7 @@ package webui
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
@@ -615,7 +616,28 @@ var signInNotices = map[string]string{
 	"signed-out": "You signed out.",
 }
 
+// signInMessage turns a sign-in error into text for the page. Messages
+// meant for users are shown; anything else is logged with a reference the
+// user can quote, so provider responses and internal hosts stay private.
+func (h *Handler) signInMessage(provider string, err error) string {
+	if ue, ok := errors.AsType[*webauth.UserError](err); ok {
+		h.Logger.Info("web sign-in stopped provider=%q: %s", provider, err)
+		msg := ue.Error()
+		return strings.ToUpper(msg[:1]) + msg[1:] + "."
+	}
+	ref := make([]byte, 4)
+	_, _ = rand.Read(ref)
+	code := hex.EncodeToString(ref)
+	h.Logger.Warn("web sign-in failed provider=%q ref=%q: %s", provider, code, err)
+	return fmt.Sprintf("Sign-in didn't work. Try again, or give your Atlantis administrator this reference: %s.", code)
+}
+
+func noStore(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+}
+
 func (h *Handler) loginPage(w http.ResponseWriter, r *http.Request) {
+	noStore(w)
 	ret := r.URL.Query().Get("return")
 	if p := h.Auth.Authenticate(r); p.Can(webauth.RoleViewer) {
 		target, ok := h.Auth.SafeReturn(ret)
@@ -642,28 +664,27 @@ func (h *Handler) renderSignIn(w http.ResponseWriter, r *http.Request, status in
 }
 
 func (h *Handler) startLogin(w http.ResponseWriter, r *http.Request) {
+	noStore(w)
 	ret := r.URL.Query().Get("return")
-	if err := h.Auth.StartLogin(w, r, mux.Vars(r)["provider"], ret); err != nil {
-		h.Logger.Warn("web sign-in could not start: %s", err)
-		h.renderSignIn(w, r, http.StatusBadRequest, ret, "Sign-in couldn't start: "+err.Error(), "")
+	provider := mux.Vars(r)["provider"]
+	if err := h.Auth.StartLogin(w, r, provider, ret); err != nil {
+		h.renderSignIn(w, r, http.StatusBadRequest, ret, h.signInMessage(provider, err), "")
 	}
 }
 
 func (h *Handler) finishLogin(w http.ResponseWriter, r *http.Request) {
-	target, _, err := h.Auth.FinishLogin(w, r, mux.Vars(r)["provider"])
+	noStore(w)
+	provider := mux.Vars(r)["provider"]
+	target, _, err := h.Auth.FinishLogin(w, r, provider)
 	if err != nil {
-		h.Logger.Warn("web sign-in failed provider=%q: %s", mux.Vars(r)["provider"], err)
-		msg := "Sign-in failed: " + err.Error()
-		if errors.Is(err, webauth.ErrNoRole) {
-			msg = "Your account signed in, but it has no Atlantis role. Ask an administrator to add you to a group that has access."
-		}
-		h.renderSignIn(w, r, http.StatusForbidden, "", msg, "")
+		h.renderSignIn(w, r, http.StatusForbidden, "", h.signInMessage(provider, err), "")
 		return
 	}
 	http.Redirect(w, r, target, http.StatusSeeOther) // #nosec G710 -- FinishLogin returns a SafeReturn path
 }
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
+	noStore(w)
 	if p := h.Auth.Authenticate(r); p != nil {
 		h.Logger.Info("web sign-out subject=%q provider=%q", p.Subject, p.Provider)
 	}

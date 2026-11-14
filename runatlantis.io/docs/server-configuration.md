@@ -1773,7 +1773,7 @@ atlantis server --web-github-allowed-orgs=acme
 ATLANTIS_WEB_GITHUB_ALLOWED_ORGS=acme
 ```
 
-Only members of these GitHub organizations can sign in with GitHub. Organizations become groups named `ORG`, and teams become `ORG/TEAM`; membership in a child team also counts for its parent team. See [web UI sign-in](experiments.md#web-ui-sign-in).
+Only members of these GitHub organizations can sign in with GitHub. Required for GitHub sign-in, because anyone can create a GitHub account. Organizations become groups named `github:ORG`, and teams become `github:ORG/TEAM`; membership in a child team also counts for its parent team. See [web UI sign-in](experiments.md#web-ui-sign-in).
 
 ### `--web-github-client-id` <Badge text="Experimental" type="warning"/>
 
@@ -1883,7 +1883,7 @@ atlantis server --web-proxy-alb-arn=arn:aws:elasticloadbalancing:us-east-1:12345
 ATLANTIS_WEB_PROXY_ALB_ARN=arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/atlantis/abc
 ```
 
-ARN of the load balancer that must have signed the `x-amzn-oidc-data` header, for `--web-proxy-auth=alb`. Its region selects the AWS public key endpoint. See [web UI sign-in](experiments.md#web-ui-sign-in).
+ARN of the load balancer that must have signed the `x-amzn-oidc-data` header, for `--web-proxy-auth=alb`. Its region selects the AWS public key endpoint. Every listener rule that forwards to Atlantis must authenticate users. See [web UI sign-in](experiments.md#web-ui-sign-in).
 
 ### `--web-proxy-auth` <Badge text="Experimental" type="warning"/>
 
@@ -1933,7 +1933,7 @@ atlantis server --web-proxy-trusted-cidrs=10.0.0.0/8
 ATLANTIS_WEB_PROXY_TRUSTED_CIDRS=10.0.0.0/8
 ```
 
-Networks allowed to send identity headers when `--web-proxy-auth=header`. Atlantis checks the address of the connection, not `X-Forwarded-For`, so put only your proxy's network here. See [web UI sign-in](experiments.md#web-ui-sign-in).
+Networks allowed to send identity headers when `--web-proxy-auth=header`. Atlantis checks the address of the connection, not `X-Forwarded-For`, so put only your proxy's network here. Networks broader than `/8` for IPv4 or `/16` for IPv6 are rejected. See [web UI sign-in](experiments.md#web-ui-sign-in).
 
 ### `--web-proxy-user-header` <Badge text="Experimental" type="warning"/>
 
@@ -1953,7 +1953,7 @@ atlantis server --web-role-admins="group:platform-admins,email:lead@acme.com"
 ATLANTIS_WEB_ROLE_ADMINS="group:platform-admins,email:lead@acme.com"
 ```
 
-Who gets the web UI admin role. Each rule is `group:NAME` (or a bare `NAME`), `email:ADDRESS`, `domain:example.com`, or `*` for everyone signed in. Emails and domains only match verified emails. Admins can do everything operators can, and lock or unlock applies for every repository. See [web UI sign-in](experiments.md#web-ui-sign-in).
+Who gets the web UI admin role. Each rule is `group:NAME` (or a bare `NAME`), `github:ORG` or `github:ORG/TEAM`, `email:ADDRESS`, `domain:example.com`, or `*` for everyone signed in. Emails and domains only match verified emails. Admins can do everything operators can, and lock or unlock applies for every repository. See [web UI sign-in](experiments.md#web-ui-sign-in).
 
 ### `--web-role-default` <Badge text="Experimental" type="warning"/>
 
@@ -1988,12 +1988,12 @@ Who gets the web UI viewer role, using the same rules as [`--web-role-admins`](#
 ### `--web-session-lifetime` <Badge text="Experimental" type="warning"/>
 
 ```bash
-atlantis server --web-session-lifetime=8h
+atlantis server --web-session-lifetime=4h
 # or
-ATLANTIS_WEB_SESSION_LIFETIME=8h
+ATLANTIS_WEB_SESSION_LIFETIME=4h
 ```
 
-How long a web UI sign-in lasts before the user signs in again. Defaults to `8h`. See [web UI sign-in](experiments.md#web-ui-sign-in).
+How long a web UI sign-in lasts before the user signs in again. Defaults to `4h`. The role is decided at sign-in and kept for the session; rotate [`--web-session-secrets`](#web-session-secrets) to end every session early. See [web UI sign-in](experiments.md#web-ui-sign-in).
 
 ### `--web-session-secrets` <Badge text="Experimental" type="warning"/>
 

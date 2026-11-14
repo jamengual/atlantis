@@ -7,9 +7,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
@@ -51,10 +53,15 @@ type OIDCConfig struct {
 type OIDCProvider struct {
 	cfg OIDCConfig
 
+	client *http.Client
+
 	mu       sync.Mutex
 	provider *oidc.Provider
 	verifier *oidc.IDTokenVerifier
 }
+
+// googleIssuer is the only issuer whose "hd" claim is trusted.
+const googleIssuer = "https://accounts.google.com"
 
 var _ LoginProvider = (*OIDCProvider)(nil)
 
@@ -70,7 +77,12 @@ func NewOIDCProvider(cfg OIDCConfig) (*OIDCProvider, error) {
 	if len(cfg.GroupsClaims) == 0 {
 		cfg.GroupsClaims = []string{"groups"}
 	}
-	return &OIDCProvider{cfg: cfg}, nil
+	return &OIDCProvider{cfg: cfg, client: &http.Client{Timeout: 10 * time.Second}}, nil
+}
+
+// withClient bounds every call to the identity provider.
+func (p *OIDCProvider) withClient(ctx context.Context) context.Context {
+	return oidc.ClientContext(ctx, p.client)
 }
 
 func (p *OIDCProvider) ID() string   { return "oidc" }
@@ -82,6 +94,8 @@ func (p *OIDCProvider) discover(ctx context.Context) (*oidc.Provider, *oidc.IDTo
 	if p.provider != nil {
 		return p.provider, p.verifier, nil
 	}
+	ctx, cancel := context.WithTimeout(p.withClient(context.WithoutCancel(ctx)), 15*time.Second)
+	defer cancel()
 	provider, err := oidc.NewProvider(ctx, p.cfg.IssuerURL)
 	if err != nil {
 		return nil, nil, fmt.Errorf("reading OIDC discovery document from %q: %w", p.cfg.IssuerURL, err)
@@ -116,14 +130,15 @@ func (p *OIDCProvider) AuthCodeURL(ctx context.Context, state, nonce, verifier, 
 }
 
 // errGroupOverage explains Entra ID's behaviour for users in many groups.
-var errGroupOverage = errors.New("your account belongs to too many groups for the identity provider to list them in the sign-in token; " +
-	"ask your administrator to assign Atlantis app roles and read them from the \"roles\" claim")
+var errGroupOverage error = &UserError{msg: "your account belongs to too many groups for the identity provider to list them in the sign-in token. " +
+	"Ask your administrator to assign Atlantis app roles and read them from the \"roles\" claim"}
 
 func (p *OIDCProvider) Exchange(ctx context.Context, code, verifier, nonce, redirectURL string) (Identity, error) {
 	provider, idVerifier, err := p.discover(ctx)
 	if err != nil {
 		return Identity{}, err
 	}
+	ctx = p.withClient(ctx)
 	conf := p.oauth2Config(provider, redirectURL)
 	tok, err := conf.Exchange(ctx, code, oauth2.VerifierOption(verifier))
 	if err != nil {
@@ -138,7 +153,7 @@ func (p *OIDCProvider) Exchange(ctx context.Context, code, verifier, nonce, redi
 		return Identity{}, fmt.Errorf("verifying the ID token: %w", err)
 	}
 	if idt.Nonce != nonce {
-		return Identity{}, errors.New("the ID token nonce does not match this sign-in")
+		return Identity{}, userError("the sign-in response does not match this browser's sign-in. Start again")
 	}
 	var claims map[string]any
 	if err := idt.Claims(&claims); err != nil {
@@ -152,7 +167,7 @@ func (p *OIDCProvider) Exchange(ctx context.Context, code, verifier, nonce, redi
 		}
 		// Some providers (GitLab, Okta by default) only return groups from
 		// the userinfo endpoint.
-		if info, err := provider.UserInfo(ctx, oauth2.StaticTokenSource(tok)); err == nil {
+		if info, err := provider.UserInfo(ctx, oauth2.StaticTokenSource(tok)); err == nil && info.Subject == idt.Subject {
 			var extra map[string]any
 			if info.Claims(&extra) == nil {
 				id.Groups = groupsFromClaims(extra, p.cfg.GroupsClaims)
@@ -162,6 +177,9 @@ func (p *OIDCProvider) Exchange(ctx context.Context, code, verifier, nonce, redi
 				}
 			}
 		}
+	}
+	if idt.Issuer != googleIssuer {
+		delete(claims, "hd")
 	}
 	if err := checkDomain(id, claims, p.cfg.AllowedDomains); err != nil {
 		return Identity{}, err
@@ -239,5 +257,5 @@ func checkDomain(id Identity, claims map[string]any, allowed []string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("accounts from this domain can't sign in to Atlantis; allowed domains are %s", strings.Join(allowed, ", "))
+	return userError("accounts from this domain can't sign in to Atlantis. Allowed domains are %s", strings.Join(allowed, ", "))
 }

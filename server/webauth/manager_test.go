@@ -190,9 +190,9 @@ func TestOIDC_Denials(t *testing.T) {
 		{"unverified email does not match the domain rule", map[string]any{"sub": "u", "email": "x@acme.com"}, nil, false, "no Atlantis role"},
 		{"entra group overage", map[string]any{"sub": "u", "_claim_names": map[string]any{"groups": "src1"},
 			"_claim_sources": map[string]any{"src1": map[string]any{"endpoint": "https://graph.windows.net/tenant/users/u/getMemberObjects"}}}, nil, false, "too many groups"},
-		{"wrong nonce", map[string]any{"sub": "u", "groups": []string{"sre"}}, nil, true, "nonce"},
+		{"wrong nonce", map[string]any{"sub": "u", "groups": []string{"sre"}}, nil, true, "does not match this browser"},
 		{"domain not allowed", map[string]any{"sub": "u", "email": "x@evil.com", "email_verified": true, "groups": []string{"sre"}},
-			func(c *webauth.OIDCConfig) { c.AllowedDomains = []string{"acme.com"} }, false, "allowed domains are acme.com"},
+			func(c *webauth.OIDCConfig) { c.AllowedDomains = []string{"acme.com"} }, false, "Allowed domains are acme.com"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -241,19 +241,22 @@ func TestCallback_RejectsForgedOrReplayedState(t *testing.T) {
 	Equals(t, http.StatusForbidden, status)
 	Assert(t, strings.Contains(body, "does not match"), body)
 
-	// Provider errors are shown, not swallowed.
+	// Provider errors are reported without echoing the provider's text.
 	resp, err = noRedirect.Get(a.srv.URL + "/ui/login/oidc")
 	Ok(t, err)
 	resp.Body.Close()
-	_, body = fetch(t, noRedirect, a.srv.URL+"/ui/auth/callback/oidc?error=access_denied&error_description=User+cancelled")
-	Assert(t, strings.Contains(body, "User cancelled"), body)
+	loc, _ := url.Parse(resp.Header.Get("Location"))
+	state := loc.Query().Get("state")
+	_, body = fetch(t, noRedirect, a.srv.URL+"/ui/auth/callback/oidc?state="+url.QueryEscape(state)+"&error=access_denied&error_description=%3Cb%3Ephish%3C%2Fb%3E")
+	Assert(t, strings.Contains(body, "didn't complete the sign-in"), body)
+	Assert(t, !strings.Contains(body, "phish"), "provider text was echoed: %s", body)
 }
 
 func TestSafeReturn(t *testing.T) {
 	m, err := webauth.NewManager(webauth.Config{
 		PublicURL:      &url.URL{Scheme: "https", Host: "atlantis.example", Path: "/atlantis"},
 		SessionSecrets: []string{secretA},
-		Providers:      []webauth.LoginProvider{mustGitHub(t, webauth.GitHubConfig{ClientID: "a", ClientSecret: "b"})},
+		Providers:      []webauth.LoginProvider{mustGitHub(t, webauth.GitHubConfig{ClientID: "a", ClientSecret: "b", AllowedOrgs: []string{"acme"}})},
 		Logger:         logging.NewNoopLogger(t),
 	})
 	Ok(t, err)
@@ -291,7 +294,7 @@ func githubConfig(f *webauthtest.GitHub, allowed []string) func(*url.URL) webaut
 		return webauth.Config{
 			SessionSecrets: []string{secretA},
 			Providers:      []webauth.LoginProvider{p},
-			Roles:          webauth.RoleMapper{Admins: []string{"acme/platform"}, Operators: []string{"acme/sre"}, Viewers: []string{"acme"}},
+			Roles:          webauth.RoleMapper{Admins: []string{"github:acme/platform"}, Operators: []string{"github:acme/sre"}, Viewers: []string{"github:acme"}},
 		}
 	}
 }
@@ -328,7 +331,7 @@ func TestGitHubHosts(t *testing.T) {
 		"github.acme.internal": "https://github.acme.internal/login/oauth/authorize",
 		"acme.ghe.com":         "https://acme.ghe.com/login/oauth/authorize",
 	} {
-		p := mustGitHub(t, webauth.GitHubConfig{ClientID: "id", ClientSecret: "s", Hostname: host})
+		p := mustGitHub(t, webauth.GitHubConfig{ClientID: "id", ClientSecret: "s", Hostname: host, AllowedOrgs: []string{"acme"}})
 		u, err := p.AuthCodeURL(t.Context(), "state", "", "verifier-verifier-verifier-verifier-verifier", "https://atlantis/cb")
 		Ok(t, err)
 		Assert(t, strings.HasPrefix(u, want+"?"), "%s: %s", host, u)
@@ -383,7 +386,7 @@ func TestMiddleware_NonPageRequestsGet401(t *testing.T) {
 func TestNewManagerValidation(t *testing.T) {
 	_, err := webauth.NewManager(webauth.Config{PublicURL: &url.URL{Scheme: "https", Host: "a"}, Logger: logging.NewNoopLogger(t)})
 	ErrContains(t, "at least one provider", err)
-	gh := mustGitHub(t, webauth.GitHubConfig{ClientID: "a", ClientSecret: "b"})
+	gh := mustGitHub(t, webauth.GitHubConfig{ClientID: "a", ClientSecret: "b", AllowedOrgs: []string{"acme"}})
 	_, err = webauth.NewManager(webauth.Config{PublicURL: &url.URL{Scheme: "https", Host: "a"}, Providers: []webauth.LoginProvider{gh}, Logger: logging.NewNoopLogger(t)})
 	ErrContains(t, "session secret", err)
 	_, err = webauth.NewManager(webauth.Config{PublicURL: &url.URL{Scheme: "https", Host: "a"}, Providers: []webauth.LoginProvider{gh}, SessionSecrets: []string{secretA}, Roles: webauth.RoleMapper{Admins: []string{"team:x"}}, Logger: logging.NewNoopLogger(t)})

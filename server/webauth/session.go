@@ -6,6 +6,7 @@ package webauth
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -40,8 +41,11 @@ func NewKeyring(secrets []string) (*Keyring, error) {
 		if len(s) < minSecretLength {
 			return nil, fmt.Errorf("session secret %d is %d characters; use at least %d random characters", i+1, len(s), minSecretLength)
 		}
-		sum := sha256.Sum256([]byte("atlantis-web-session:" + s))
-		block, err := aes.NewCipher(sum[:])
+		key, err := hkdf.Key(sha256.New, []byte(s), nil, "atlantis web session v1", 32)
+		if err != nil {
+			return nil, fmt.Errorf("deriving session key: %w", err)
+		}
+		block, err := aes.NewCipher(key)
 		if err != nil {
 			return nil, fmt.Errorf("creating cipher: %w", err)
 		}

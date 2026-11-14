@@ -79,7 +79,15 @@ type ProxyAuthenticator struct {
 	iapKeys  *oidc.RemoteKeySet
 	keyMu    sync.Mutex
 	keyCache map[string]*ecdsa.PublicKey
+	// fetchMu serializes key downloads so a burst of requests with unknown
+	// key IDs makes at most one outbound request at a time.
+	fetchMu sync.Mutex
+	// misses remembers key IDs that failed recently.
+	misses map[string]time.Time
 }
+
+// keyMissTTL is how long a key ID that failed to load is not retried.
+const keyMissTTL = 5 * time.Minute
 
 // ErrNoProxyIdentity means the request carried no proxy identity.
 var ErrNoProxyIdentity = errors.New("the request has no identity from the authenticating proxy")
@@ -91,7 +99,7 @@ func NewProxyAuthenticator(cfg ProxyConfig) (*ProxyAuthenticator, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	p := &ProxyAuthenticator{cfg: cfg, keyCache: map[string]*ecdsa.PublicKey{}}
+	p := &ProxyAuthenticator{cfg: cfg, keyCache: map[string]*ecdsa.PublicKey{}, misses: map[string]time.Time{}}
 	switch cfg.Type {
 	case ProxyALB:
 		m := albArnRegion.FindStringSubmatch(cfg.ALBArn)
@@ -118,6 +126,12 @@ func NewProxyAuthenticator(cfg ProxyConfig) (*ProxyAuthenticator, error) {
 		}
 		if len(cfg.TrustedCIDRs) == 0 {
 			return nil, errors.New("header sign-in needs the trusted proxy networks, so other clients can't set the headers")
+		}
+		for _, n := range cfg.TrustedCIDRs {
+			ones, bits := n.Mask.Size()
+			if (bits == 32 && ones < 8) || (bits == 128 && ones < 16) {
+				return nil, fmt.Errorf("trusted proxy network %s is too broad; list only the networks your proxy connects from", n)
+			}
 		}
 	default:
 		return nil, fmt.Errorf("unknown proxy type %q; use alb, iap, or header", cfg.Type)
@@ -164,9 +178,9 @@ func (p *ProxyAuthenticator) alb(r *http.Request) (Identity, error) {
 		return Identity{}, fmt.Errorf("verifying the ALB identity header: %w", err)
 	}
 	id := Identity{Subject: "alb:" + claims.Subject, Email: claims.Email, Name: claims.Name}
-	// ALB has already authenticated the user; trust the email unless the
-	// identity provider explicitly marked it unverified.
-	id.EmailVerified = claims.Email != "" && claims.EmailVerified != false && claims.EmailVerified != "false"
+	// Some identity providers let users edit their email and omit
+	// email_verified, so only an explicit true is trusted for role rules.
+	id.EmailVerified = claims.Email != "" && (claims.EmailVerified == true || claims.EmailVerified == "true")
 	id.Groups = groupsFromClaims(map[string]any{"groups": claims.Groups}, []string{"groups"})
 	if id.Name == "" {
 		id.Name = id.Email
@@ -180,13 +194,45 @@ func (p *ProxyAuthenticator) albKey(ctx context.Context, kid string) (*ecdsa.Pub
 	if !kidPattern.MatchString(kid) {
 		return nil, fmt.Errorf("invalid key id %q", kid)
 	}
-	p.keyMu.Lock()
-	if k, ok := p.keyCache[kid]; ok {
-		p.keyMu.Unlock()
+	if k, ok := p.cachedKey(kid); ok {
 		return k, nil
 	}
+	p.fetchMu.Lock()
+	defer p.fetchMu.Unlock()
+	// Another request may have loaded or failed this key while we waited.
+	if k, ok := p.cachedKey(kid); ok {
+		return k, nil
+	}
+	p.keyMu.Lock()
+	missed, recent := p.misses[kid]
 	p.keyMu.Unlock()
+	if recent && p.cfg.Now().Sub(missed) < keyMissTTL {
+		return nil, fmt.Errorf("ALB public key %q failed to load recently", kid)
+	}
+	key, err := p.fetchALBKey(ctx, kid)
+	p.keyMu.Lock()
+	defer p.keyMu.Unlock()
+	if err != nil {
+		if len(p.misses) > 1000 {
+			p.misses = map[string]time.Time{}
+		}
+		p.misses[kid] = p.cfg.Now()
+		return nil, err
+	}
+	p.keyCache[kid] = key
+	return key, nil
+}
 
+func (p *ProxyAuthenticator) cachedKey(kid string) (*ecdsa.PublicKey, bool) {
+	p.keyMu.Lock()
+	defer p.keyMu.Unlock()
+	k, ok := p.keyCache[kid]
+	return k, ok
+}
+
+func (p *ProxyAuthenticator) fetchALBKey(ctx context.Context, kid string) (*ecdsa.PublicKey, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.albKeys+url.PathEscape(kid), nil)
 	if err != nil {
 		return nil, err
@@ -215,9 +261,6 @@ func (p *ProxyAuthenticator) albKey(ctx context.Context, kid string) (*ecdsa.Pub
 	if !ok {
 		return nil, fmt.Errorf("ALB public key %q is not an ECDSA key", kid)
 	}
-	p.keyMu.Lock()
-	p.keyCache[kid] = key
-	p.keyMu.Unlock()
 	return key, nil
 }
 

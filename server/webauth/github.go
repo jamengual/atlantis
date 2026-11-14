@@ -8,10 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/oauth2"
 )
@@ -33,8 +35,9 @@ type GitHubConfig struct {
 }
 
 // GitHubProvider signs users in with GitHub. Organizations become groups
-// named "org", and teams become "org/team"; membership in a child team also
-// counts as membership in its parent team.
+// named "github:org", and teams "github:org/team"; membership in a child team
+// also counts as membership in its parent team. The prefix keeps anyone who
+// registers a GitHub organization from matching another provider's group.
 type GitHubProvider struct {
 	cfg     GitHubConfig
 	webBase string
@@ -46,9 +49,15 @@ var _ LoginProvider = (*GitHubProvider)(nil)
 // maxPages bounds paging through organizations and teams.
 const maxPages = 10
 
+// GitHubGroupPrefix starts every group name that comes from GitHub.
+const GitHubGroupPrefix = "github:"
+
 func NewGitHubProvider(cfg GitHubConfig) (*GitHubProvider, error) {
 	if cfg.ClientID == "" || cfg.ClientSecret == "" {
 		return nil, errors.New("GitHub sign-in needs a client ID and client secret")
+	}
+	if len(cfg.AllowedOrgs) == 0 {
+		return nil, errors.New("GitHub sign-in needs the allowed organizations, because anyone can create a GitHub account")
 	}
 	host := strings.TrimSpace(cfg.Hostname)
 	if host == "" {
@@ -67,7 +76,7 @@ func NewGitHubProvider(cfg GitHubConfig) (*GitHubProvider, error) {
 		p.webBase, p.apiBase = "https://"+host, "https://"+host+"/api/v3"
 	}
 	if p.cfg.HTTPClient == nil {
-		p.cfg.HTTPClient = http.DefaultClient
+		p.cfg.HTTPClient = &http.Client{Timeout: 10 * time.Second}
 	}
 	return p, nil
 }
@@ -157,17 +166,17 @@ func (p *GitHubProvider) Exchange(ctx context.Context, code, verifier, _, redire
 		}
 	}
 	for _, o := range orgs {
-		add(o.Login)
+		add(GitHubGroupPrefix + o.Login)
 	}
 	for _, t := range teams {
-		add(t.Organization.Login)
+		add(GitHubGroupPrefix + t.Organization.Login)
 		for team := &t; team != nil; team = team.Parent {
-			add(t.Organization.Login + "/" + team.Slug)
+			add(GitHubGroupPrefix + t.Organization.Login + "/" + team.Slug)
 		}
 	}
 
 	if len(p.cfg.AllowedOrgs) > 0 && !memberOfAny(orgs, p.cfg.AllowedOrgs) {
-		return Identity{}, fmt.Errorf("only members of %s can sign in to Atlantis with GitHub", strings.Join(p.cfg.AllowedOrgs, ", "))
+		return Identity{}, userError("only members of %s can sign in to Atlantis with GitHub", strings.Join(p.cfg.AllowedOrgs, ", "))
 	}
 	return id, nil
 }
@@ -198,7 +207,7 @@ func (p *GitHubProvider) get(ctx context.Context, client *http.Client, path stri
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("calling GitHub %s: status %d", path, resp.StatusCode)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(out); err != nil {
 		return fmt.Errorf("reading GitHub %s: %w", path, err)
 	}
 	return nil

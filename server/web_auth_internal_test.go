@@ -39,7 +39,7 @@ func TestNewWebAuth(t *testing.T) {
 
 	gh := UserConfig{WebSSOProviders: []string{"oidc", "github"}, WebSessionSecrets: []string{testSessionSecret},
 		WebOIDCIssuerURL: "https://login.example.com", WebOIDCClientID: "id", WebOIDCClientSecret: "secret",
-		WebGitHubClientID: "gh", WebGitHubClientSecret: "s", WebRoleDefault: "viewer"}
+		WebGitHubClientID: "gh", WebGitHubClientSecret: "s", WebGitHubAllowedOrgs: []string{"acme"}, WebRoleDefault: "viewer"}
 	m, err = newWebAuth(gh, public, logger)
 	Ok(t, err)
 	Equals(t, 2, len(m.Providers()))

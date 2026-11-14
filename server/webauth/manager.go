@@ -9,9 +9,11 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -34,7 +36,7 @@ type Config struct {
 	PublicURL *url.URL
 	// SessionSecrets encrypt cookies. The first one encrypts; all decrypt.
 	SessionSecrets []string
-	// SessionLifetime is how long a sign-in lasts. Defaults to 8 hours.
+	// SessionLifetime is how long a sign-in lasts. Defaults to 4 hours.
 	SessionLifetime time.Duration
 	Roles           RoleMapper
 	Providers       []LoginProvider
@@ -51,6 +53,37 @@ type Manager struct {
 	cfg  Config
 	keys *Keyring
 	base string // external base path, without a trailing slash
+}
+
+// DefaultSessionLifetime is how long a sign-in lasts by default. Roles are
+// fixed for the life of a session, and a session can only be ended early by
+// rotating the session secrets, so the default is kept short.
+const DefaultSessionLifetime = 4 * time.Hour
+
+// UserError is an error whose message is safe to show to the person signing
+// in. Other errors are logged and replaced with a generic message, so
+// internal hostnames and provider responses never reach the browser.
+type UserError struct{ msg string }
+
+func (e *UserError) Error() string { return e.msg }
+
+func userError(format string, args ...any) error {
+	return &UserError{msg: fmt.Sprintf(format, args...)}
+}
+
+// SecureCookies reports whether cookies get the Secure attribute: always,
+// except when Atlantis is served over plain http on a loopback host for
+// local development.
+func (m *Manager) SecureCookies() bool {
+	if m.cfg.PublicURL.Scheme == "https" {
+		return true
+	}
+	host := m.cfg.PublicURL.Hostname()
+	if host == "localhost" {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip == nil || !ip.IsLoopback()
 }
 
 // ProviderInfo describes a sign-in button.
@@ -71,7 +104,7 @@ func NewManager(cfg Config) (*Manager, error) {
 		return nil, err
 	}
 	if cfg.SessionLifetime <= 0 {
-		cfg.SessionLifetime = 8 * time.Hour
+		cfg.SessionLifetime = DefaultSessionLifetime
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -124,6 +157,12 @@ func (m *Manager) Authenticate(r *http.Request) *Principal {
 }
 
 func (m *Manager) principal(id Identity, provider string) *Principal {
+	if provider != "github" {
+		// Only the GitHub provider may report github: groups.
+		id.Groups = slices.DeleteFunc(slices.Clone(id.Groups), func(g string) bool {
+			return strings.HasPrefix(strings.ToLower(g), GitHubGroupPrefix)
+		})
+	}
 	p := &Principal{Subject: id.Subject, Name: id.Name, Provider: provider, Role: m.cfg.Roles.Resolve(id)}
 	if id.EmailVerified {
 		p.Email = id.Email
@@ -260,24 +299,22 @@ func (m *Manager) StartLogin(w http.ResponseWriter, r *http.Request, providerID,
 func (m *Manager) FinishLogin(w http.ResponseWriter, r *http.Request, providerID string) (string, *Principal, error) {
 	c, err := r.Cookie(flowCookie)
 	if err != nil {
-		return "", nil, errors.New("this sign-in has no saved state; it may have expired or been opened in another browser")
+		return "", nil, userError("this sign-in has no saved state; it may have expired or been opened in another browser. Start again")
 	}
 	// The sign-in state is single use.
 	http.SetCookie(w, m.cookie(flowCookie, "", m.base+"/ui/auth/", time.Unix(0, 0)))
 	var fs flowState
 	if err := m.keys.Open(flowPurpose, c.Value, m.cfg.Now(), &fs); err != nil {
-		return "", nil, errors.New("this sign-in expired; start again")
+		return "", nil, userError("this sign-in expired. Start again")
 	}
 	q := r.URL.Query()
-	if e := q.Get("error"); e != "" {
-		desc := q.Get("error_description")
-		if desc == "" {
-			desc = e
-		}
-		return "", nil, fmt.Errorf("the identity provider refused the sign-in: %s", desc)
-	}
 	if fs.Provider != providerID || subtle.ConstantTimeCompare([]byte(fs.State), []byte(q.Get("state"))) != 1 {
-		return "", nil, errors.New("the sign-in response does not match this browser's sign-in; start again")
+		return "", nil, userError("the sign-in response does not match this browser's sign-in. Start again")
+	}
+	if e := q.Get("error"); e != "" {
+		// The description comes from the provider; log it, don't show it.
+		m.cfg.Logger.Info("web sign-in refused by provider=%q error=%q description=%q", providerID, e, q.Get("error_description"))
+		return "", nil, userError("the identity provider didn't complete the sign-in")
 	}
 	p := m.provider(providerID)
 	if p == nil {
@@ -303,7 +340,7 @@ func (m *Manager) FinishLogin(w http.ResponseWriter, r *http.Request, providerID
 }
 
 // ErrNoRole means the user signed in but matches no role.
-var ErrNoRole = errors.New("your account signed in, but it has no Atlantis role; ask an administrator to add you to a group that has access")
+var ErrNoRole error = &UserError{msg: "your account signed in, but it has no Atlantis role. Ask an administrator to add you to a group that has access"}
 
 // Logout clears the session cookie.
 func (m *Manager) Logout(w http.ResponseWriter) {
@@ -318,7 +355,7 @@ func (m *Manager) cookie(name, value, cookiePath string, exp time.Time) *http.Co
 		Value:    value,
 		Path:     cookiePath,
 		HttpOnly: true,
-		Secure:   m.cfg.PublicURL.Scheme == "https",
+		Secure:   m.SecureCookies(),
 		SameSite: http.SameSiteLaxMode,
 		Expires:  exp,
 	}

@@ -231,7 +231,7 @@ const (
 	DefaultWebBasicAuth                 = false
 	DefaultWebUsername                  = "atlantis"
 	DefaultWebPassword                  = "atlantis"
-	DefaultWebSessionLifetime           = "8h"
+	DefaultWebSessionLifetime           = "4h"
 	DefaultWebOIDCName                  = "Single sign-on"
 	DefaultWebRoleDefault               = "none"
 )
@@ -255,13 +255,13 @@ var stringSliceFlags = map[string]stringSliceFlag{
 		description: "Experimental. Only users whose verified email, or Google Workspace hd claim, is in one of these domains can sign in with OIDC.",
 	},
 	WebGitHubAllowedOrgsFlag: {
-		description: "Experimental. Only members of these GitHub organizations can sign in with GitHub.",
+		description: "Experimental. Only members of these GitHub organizations can sign in with GitHub. Required for GitHub sign-in. In role rules, GitHub groups are github:ORG and github:ORG/TEAM.",
 	},
 	WebProxyTrustedCIDRsFlag: {
 		description: "Experimental. Networks allowed to send identity headers when --web-proxy-auth=header, such as 10.0.0.0/8. The connection address is checked, not X-Forwarded-For.",
 	},
 	WebRoleAdminsFlag: {
-		description: "Experimental. Who gets the web UI admin role: group:NAME (or a bare NAME), email:ADDRESS, domain:example.com, or * for everyone signed in. Admins can also lock and unlock applies.",
+		description: "Experimental. Who gets the web UI admin role: group:NAME (or a bare NAME), github:ORG or github:ORG/TEAM, email:ADDRESS, domain:example.com, or * for everyone signed in. Admins can also lock and unlock applies.",
 	},
 	WebRoleOperatorsFlag: {
 		description: "Experimental. Who gets the web UI operator role, using the same rules as --web-role-admins. Operators can also discard plans and unlock projects.",
@@ -276,7 +276,7 @@ var stringSliceFlags = map[string]stringSliceFlag{
 
 var stringFlags = map[string]stringFlag{
 	WebSessionLifetimeFlag: {
-		description:  "Experimental. How long a web UI sign-in lasts, such as 8h.",
+		description:  "Experimental. How long a web UI sign-in lasts, such as 4h. Roles are fixed for the session, and sessions can only be ended early by rotating --web-session-secrets.",
 		defaultValue: DefaultWebSessionLifetime,
 	},
 	WebOIDCNameFlag: {
@@ -293,7 +293,7 @@ var stringFlags = map[string]stringFlag{
 		description: "Experimental. OIDC client secret. Set with ATLANTIS_WEB_OIDC_CLIENT_SECRET.",
 	},
 	WebGitHubClientIDFlag: {
-		description: "Experimental. Client ID of the GitHub OAuth app or GitHub App used for web UI sign-in.",
+		description: "Experimental. Client ID of the GitHub OAuth app or GitHub App used for web UI sign-in. Requires --web-github-allowed-orgs.",
 	},
 	WebGitHubClientSecretFlag: {
 		description: "Experimental. Client secret for GitHub sign-in. Set with ATLANTIS_WEB_GITHUB_CLIENT_SECRET.",
