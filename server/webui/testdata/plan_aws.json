@@ -1,0 +1,194 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "resource_changes": [
+    {
+      "address": "data.aws_iam_policy_document.assume",
+      "mode": "data",
+      "type": "aws_iam_policy_document",
+      "name": "assume",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "action_reason": "read_because_config_unknown",
+      "change": {
+        "actions": ["read"],
+        "before": null,
+        "after": {"statement": [{"actions": ["sts:AssumeRole"], "effect": "Allow"}]},
+        "after_unknown": {"id": true, "json": true, "statement": [{"actions": [false]}]},
+        "before_sensitive": false,
+        "after_sensitive": {"statement": [{"actions": [false]}]}
+      }
+    },
+    {
+      "address": "aws_security_group.alb",
+      "mode": "managed",
+      "type": "aws_security_group",
+      "name": "alb",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "id": "sg-0a91c3e2",
+          "name": "alb-checkout",
+          "description": "<b>public</b> ALB",
+          "ingress": [{"cidr_blocks": ["0.0.0.0/0"], "from_port": 443, "to_port": 443, "protocol": "tcp"}],
+          "tags": {"env": "prod", "kubernetes.io/role/elb": "1"}
+        },
+        "after": {
+          "id": "sg-0a91c3e2",
+          "name": "alb-checkout",
+          "description": "<b>public</b> ALB",
+          "ingress": [{"cidr_blocks": ["10.40.0.0/16"], "from_port": 443, "to_port": 443, "protocol": "tcp"}],
+          "tags": {"env": "prod", "kubernetes.io/role/elb": "1", "owner": "<script>alert(1)</script>"}
+        },
+        "after_unknown": {"ingress": [{"cidr_blocks": [false]}], "tags": {}},
+        "before_sensitive": {"ingress": [{"cidr_blocks": [false]}], "tags": {}},
+        "after_sensitive": {"ingress": [{"cidr_blocks": [false]}], "tags": {}}
+      }
+    },
+    {
+      "address": "aws_db_instance.main",
+      "mode": "managed",
+      "type": "aws_db_instance",
+      "name": "main",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "action_reason": "replace_because_cannot_update",
+      "change": {
+        "actions": ["create", "delete"],
+        "before": {"id": "db-1", "engine_version": "15.4", "password": "hunter2-old", "identifier": "main", "master_user_secret": [{"secret_arn": "arn:old"}]},
+        "after": {"engine_version": "16.1", "password": "hunter2-new", "identifier": "main", "master_user_secret": [{"secret_arn": "arn:new"}]},
+        "after_unknown": {"id": true, "endpoint": true},
+        "before_sensitive": {"password": true, "master_user_secret": true},
+        "after_sensitive": {"password": true, "master_user_secret": true},
+        "replace_paths": [["engine_version"]]
+      }
+    },
+    {
+      "address": "aws_instance.web[\"blue\"]",
+      "mode": "managed",
+      "type": "aws_instance",
+      "name": "web",
+      "index": "blue",
+      "deposed": "00000001",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["delete"],
+        "before": {"id": "i-0abc", "instance_type": "t3.micro", "user_data": null},
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    },
+    {
+      "address": "module.vpc.module.subnets[\"a\"].aws_subnet.this[0]",
+      "module_address": "module.vpc.module.subnets[\"a\"]",
+      "mode": "managed",
+      "type": "aws_subnet",
+      "name": "this",
+      "index": 0,
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {"cidr_block": "10.40.1.0/24", "map_public_ip_on_launch": false, "tags": {"Name": "a"}, "ipv6_cidr_block": null},
+        "after_unknown": {"id": true, "arn": true, "tags": {}},
+        "before_sensitive": false,
+        "after_sensitive": {"tags": {}}
+      }
+    },
+    {
+      "address": "aws_s3_bucket.logs",
+      "mode": "managed",
+      "type": "aws_s3_bucket",
+      "name": "logs",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["no-op"],
+        "before": {"bucket": "acme-logs", "id": "acme-logs"},
+        "after": {"bucket": "acme-logs", "id": "acme-logs"},
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {},
+        "importing": {"id": "acme-logs"}
+      }
+    },
+    {
+      "address": "aws_iam_role.ci",
+      "mode": "managed",
+      "type": "aws_iam_role",
+      "name": "ci",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["update"],
+        "before": {"name": "ci", "max_session_duration": 3600},
+        "after": {"name": "ci", "max_session_duration": 7200},
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {},
+        "importing": {"id": "ci"}
+      }
+    },
+    {
+      "address": "aws_lb.public",
+      "mode": "managed",
+      "type": "aws_lb",
+      "name": "public",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "action_reason": "replace_by_request",
+      "change": {
+        "actions": ["create", "delete"],
+        "before": {"id": "arn:lb", "name": "public"},
+        "after": {"name": "public"},
+        "after_unknown": {"id": true},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_kms_key.legacy",
+      "mode": "managed",
+      "type": "aws_kms_key",
+      "name": "legacy",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["forget"],
+        "before": {"id": "key-1"},
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    },
+    {
+      "address": "aws_route53_record.www",
+      "previous_address": "aws_route53_record.root",
+      "mode": "managed",
+      "type": "aws_route53_record",
+      "name": "www",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["no-op"],
+        "before": {"name": "www"},
+        "after": {"name": "www"},
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_vpc.main",
+      "mode": "managed",
+      "type": "aws_vpc",
+      "name": "main",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["no-op"],
+        "before": {"cidr_block": "10.40.0.0/16"},
+        "after": {"cidr_block": "10.40.0.0/16"},
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    }
+  ]
+}

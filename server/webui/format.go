@@ -329,3 +329,133 @@ func providerMark(id string) string {
 	}
 	return "?"
 }
+
+// planHref links to a project's plan page.
+func planHref(base string, repo Repository, num int, ref ProjectRef) string {
+	href, _, _ := strings.Cut(pullHref(base, repo, num), "?")
+	q := url.Values{"dir": {ref.Dir}, "workspace": {ref.Workspace}}
+	if ref.Name != "" {
+		q.Set("project", ref.Name)
+	}
+	if repo.VCSHost != "" {
+		q.Set("host", repo.VCSHost)
+	}
+	return href + "/plan?" + q.Encode()
+}
+
+// planGroup is the resources of a plan that share an action.
+type planGroup struct {
+	Action PlanAction
+	Label  string
+	Symbol string
+	// Class colors the symbol: a (add), c (change), d (destroy), r (replace)
+	// or o (other).
+	Class string
+	// Filter is the filter chip that shows the group.
+	Filter    string
+	Resources []ResourceChange
+}
+
+// planGroupOrder puts the riskiest changes first.
+var planGroupOrder = []planGroup{
+	{Action: PlanDelete, Label: "Destroy", Symbol: "-", Class: "d", Filter: "destroy"},
+	{Action: PlanReplace, Label: "Replace", Symbol: "±", Class: "r", Filter: "replace"},
+	{Action: PlanUpdate, Label: "Change", Symbol: "~", Class: "c", Filter: "change"},
+	{Action: PlanCreate, Label: "Add", Symbol: "+", Class: "a", Filter: "add"},
+	{Action: PlanForget, Label: "Remove from state", Symbol: "∅", Class: "o", Filter: "other"},
+	{Action: PlanImport, Label: "Import", Symbol: "↓", Class: "o", Filter: "other"},
+	{Action: PlanMove, Label: "Move", Symbol: "→", Class: "o", Filter: "other"},
+	{Action: PlanRead, Label: "Read data source", Symbol: "≤", Class: "o", Filter: "other"},
+}
+
+func planGroups(p ParsedPlan) []planGroup {
+	var out []planGroup
+	for _, g := range planGroupOrder {
+		for _, r := range p.Resources {
+			if r.Action == g.Action {
+				g.Resources = append(g.Resources, r)
+			}
+		}
+		if len(g.Resources) > 0 {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+type planFilter struct {
+	Key   string
+	Label string
+	Count int
+}
+
+// planFilters lists the filter chips with how many listed resources each
+// shows. Chips with nothing to show are left out, except All.
+func planFilters(groups []planGroup) []planFilter {
+	out := []planFilter{{Key: "all", Label: "All"}}
+	for _, f := range []planFilter{{Key: "add", Label: "Add"}, {Key: "change", Label: "Change"}, {Key: "destroy", Label: "Destroy"}, {Key: "replace", Label: "Replace"}, {Key: "other", Label: "Other"}} {
+		for _, g := range groups {
+			if g.Filter == f.Key {
+				f.Count += len(g.Resources)
+			}
+		}
+		out[0].Count += f.Count
+		if f.Count > 0 {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// planMessage explains why a project's plan details can't be shown.
+func planMessage(p ProjectPlan, state ProjectState) (title, body string) {
+	switch p.Status {
+	case PlanNoJSON:
+		return "Atlantis didn't save this plan as JSON",
+			"Plan details come from the show step, which saves the plan as JSON. It runs as part of policy checks. Without policy checks, add a show step after plan in the project's workflow, then run atlantis plan again."
+	case PlanOutdated:
+		if state == StatePlanFailed {
+			return "The latest plan failed", "The plan JSON on this replica is from an earlier plan. Fix the error in the plan log, then run atlantis plan again."
+		}
+		return "The plan JSON is from an earlier plan", "The saved plan is newer than its JSON, so these details would be wrong. Run atlantis plan again with the show step in the workflow."
+	case PlanTooLarge:
+		return "This plan is too large to show here",
+			fmt.Sprintf("The plan JSON is %d MB and the web UI reads up to %d MB. Read the plan in the job log or the pull request comment.", p.Size>>20, MaxPlanJSONBytes>>20)
+	case PlanUnreadable:
+		return "Atlantis couldn't read the plan JSON", "The file isn't a Terraform plan, or it changed while Atlantis read it. Run atlantis plan again."
+	}
+	return "There's no saved plan for this project on this replica",
+		"It may have been applied or discarded, or planned on another replica. Run atlantis plan to plan it again."
+}
+
+// actionSentence says what the plan does to a resource, and why when
+// Terraform says.
+func actionSentence(r ResourceChange) string {
+	s := actionVerb(r)
+	if r.Reason != "" {
+		s += " because " + r.Reason
+	}
+	return s + "."
+}
+
+func actionVerb(r ResourceChange) string {
+	switch r.Action {
+	case PlanCreate:
+		return "Terraform will create this resource"
+	case PlanUpdate:
+		return "Terraform will update this resource in place"
+	case PlanDelete:
+		return "Terraform will destroy this resource"
+	case PlanReplace:
+		return "Terraform will replace this resource"
+	case PlanForget:
+		return "Terraform will remove this resource from state without destroying it"
+	case PlanImport:
+		return "Terraform will import this resource without changing it"
+	case PlanMove:
+		return "Terraform will move this resource to a new address without changing it"
+	case PlanRead:
+		return "Terraform will read this data source during apply"
+	}
+	return "Terraform will change this resource"
+}

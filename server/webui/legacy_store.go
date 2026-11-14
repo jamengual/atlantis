@@ -65,8 +65,17 @@ type LegacyStore struct {
 	PollInterval time.Duration
 	// Now returns the current time. Tests replace it.
 	Now func() time.Time
+	// WorkingDir finds pull request clones on this replica, where the show
+	// step leaves each plan as JSON. Plan details are unavailable when nil.
+	WorkingDir WorkingDirFinder
+	// SharePlanDir is where plan files are kept when --share-plan-dir is set.
+	SharePlanDir string
+	// PlanLimits bounds the plan details kept for a page. Defaults to
+	// DefaultPlanLimits.
+	PlanLimits PlanLimits
 
 	changesCache sync.Map // job ID -> Changes
+	countsCache  sync.Map // plan JSON path -> cachedCounts
 }
 
 var _ Store = (*LegacyStore)(nil)
@@ -214,6 +223,9 @@ func (s *LegacyStore) buildPull(st models.PullStatus, locks map[string]models.Pr
 		}
 		if latestPlan != nil {
 			p.Changes = s.planChanges(latestPlan.ID)
+		}
+		if !p.Changes.Known && p.State != StateRunning {
+			p.Changes = s.jsonChanges(st, ps)
 		}
 		pr.Projects = append(pr.Projects, p)
 	}

@@ -111,6 +111,21 @@ Locks, the apply lock, and pull request status come from the locking database, s
 
 To disable the new UI, remove `web-ui` from `experiments` and restart. Routes under `/ui` then return HTTP 404.
 
+### Web UI plan details
+
+Each project on a pull request page has a **Plan** page that lists every resource the plan creates, updates, destroys, replaces, imports, moves, reads, or removes from state, grouped by action, with filters and attribute-level changes. Values Terraform marks as sensitive are hidden; values known only after apply are labeled. Every other value appears as it does in the plan output, so anyone who can view the UI can read it.
+
+The page reads the JSON plan that the `show` step writes next to the project, the same file [policy checks](policy-checking.md) use. With policy checks enabled, every plan has it. Without them, add `show` after `plan` in the workflow:
+
+```yaml
+workflows:
+  default:
+    plan:
+      steps: [init, plan, show]
+```
+
+Atlantis uses the JSON only when it is a regular file in the project's clone that is newer than the saved plan, and reads up to 64 MB. The web UI doesn't run Terraform itself. Plan details live in the working directory of the replica that ran the plan, so other replicas show them as unavailable, and they're gone once the plan is applied or discarded or the pull request closes. When job output is no longer in memory, the change counts on pull request pages also come from this file.
+
 ### Web UI sign-in
 
 Web UI sign-in replaces basic auth for the pages at `/ui` with your identity provider, and gives each person a role. It only applies to `/ui`; the existing UI and the API keep their current authentication. Sign-in requires the `web-ui` experiment.

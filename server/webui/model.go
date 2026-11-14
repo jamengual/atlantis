@@ -168,6 +168,50 @@ type Capabilities struct {
 	ClusterJobs bool
 	// AuditLog is true when user actions are stored and can be listed.
 	AuditLog bool
+	// SharedPlans is true when plan details are stored centrally and any
+	// replica can show them.
+	SharedPlans bool
+}
+
+// ProjectRef identifies a project within a pull request.
+type ProjectRef struct {
+	Dir       string
+	Workspace string
+	Name      string
+}
+
+// Ref returns the reference to the project.
+func (p Project) Ref() ProjectRef {
+	return ProjectRef{Dir: p.Dir, Workspace: p.Workspace, Name: p.Name}
+}
+
+// PlanStatus says whether a project's plan details can be shown.
+type PlanStatus string
+
+const (
+	// PlanReady means the plan details were read.
+	PlanReady PlanStatus = "ready"
+	// PlanNoSavedPlan means this replica has no saved plan for the project.
+	PlanNoSavedPlan PlanStatus = "no_saved_plan"
+	// PlanNoJSON means the plan was saved but not as JSON.
+	PlanNoJSON PlanStatus = "no_json"
+	// PlanOutdated means the JSON is from an earlier plan than the saved one.
+	PlanOutdated PlanStatus = "outdated"
+	// PlanTooLarge means the JSON is over the size the UI reads.
+	PlanTooLarge PlanStatus = "too_large"
+	// PlanUnreadable means the JSON could not be read as a Terraform plan.
+	PlanUnreadable PlanStatus = "unreadable"
+)
+
+// ProjectPlan is the plan of one project in a pull request. Plan holds the
+// details only when Status is PlanReady.
+type ProjectPlan struct {
+	Status PlanStatus
+	// GeneratedAt is when the plan JSON was written.
+	GeneratedAt time.Time
+	// Size is the size of the plan JSON in bytes, when known.
+	Size int64
+	Plan ParsedPlan
 }
 
 // Store is the read side of the web UI.
@@ -178,6 +222,9 @@ type Store interface {
 	// GetPull returns nil when Atlantis has no status for the pull request.
 	// An empty repo.VCSHost matches any host.
 	GetPull(ctx context.Context, repo Repository, num int) (*PullRequest, error)
+	// GetPlan returns the resource changes in a project's latest plan. It
+	// returns nil when Atlantis has no such project in the pull request.
+	GetPlan(ctx context.Context, repo Repository, num int, project ProjectRef) (*ProjectPlan, error)
 	ListLocks(ctx context.Context) ([]Lock, error)
 	ApplyLock(ctx context.Context) (ApplyLock, error)
 	ListJobs(ctx context.Context, f JobFilter) []Job
