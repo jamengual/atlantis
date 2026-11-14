@@ -115,7 +115,7 @@ func (l *LocksController) DeleteLock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lock, err := l.DeleteLockCommand.DeleteLock(l.Logger, idUnencoded)
+	lock, err := l.DiscardLock(idUnencoded, "")
 	if err != nil {
 		l.respond(w, logging.Error, http.StatusInternalServerError, "deleting lock failed with: '%s'", err)
 		return
@@ -126,24 +126,41 @@ func (l *LocksController) DeleteLock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	l.respond(w, logging.Info, http.StatusOK, "Deleted lock id '%s'", id)
+}
+
+// DiscardLock deletes the lock at id, marks its plan as discarded, and
+// comments on the pull request. actor names who discarded the plan in that
+// comment; leave it empty when the caller is unknown. It returns a nil lock
+// when no lock exists at id.
+func (l *LocksController) DiscardLock(id string, actor string) (*models.ProjectLock, error) {
+	lock, err := l.DeleteLockCommand.DeleteLock(l.Logger, id)
+	if err != nil || lock == nil {
+		return lock, err
+	}
+
 	// NOTE: Because BaseRepo was added to the PullRequest model later, previous
 	// installations of Atlantis will have locks in their DB that do not have
 	// this field on PullRequest. We skip commenting in this case.
-	if lock.Pull.BaseRepo != (models.Repo{}) {
-		if err := l.Database.UpdateProjectStatus(lock.Pull, lock.Workspace, lock.Project.Path, models.DiscardedPlanStatus); err != nil {
-			l.Logger.Err("unable to update project status: %s", err)
-		}
-
-		// Once the lock has been deleted, comment back on the pull request.
-		comment := fmt.Sprintf("**Warning**: The plan for dir: `%s` workspace: `%s` was **discarded** via the Atlantis UI.\n\n"+
-			"To `apply` this plan you must run `plan` again.", lock.Project.Path, lock.Workspace)
-		if err = l.VCSClient.CreateComment(l.Logger, lock.Pull.BaseRepo, lock.Pull.Num, comment, ""); err != nil {
-			l.Logger.Warn("failed commenting on pull request: %s", err)
-		}
-	} else {
+	if lock.Pull.BaseRepo == (models.Repo{}) {
 		l.Logger.Debug("skipping commenting on pull request and deleting workspace because BaseRepo field is empty")
+		return lock, nil
 	}
-	l.respond(w, logging.Info, http.StatusOK, "Deleted lock id '%s'", id)
+
+	if err := l.Database.UpdateProjectStatus(lock.Pull, lock.Workspace, lock.Project.Path, models.DiscardedPlanStatus); err != nil {
+		l.Logger.Err("unable to update project status: %s", err)
+	}
+
+	via := "via the Atlantis UI"
+	if actor != "" {
+		via = fmt.Sprintf("via the Atlantis UI by `%s`", actor)
+	}
+	comment := fmt.Sprintf("**Warning**: The plan for dir: `%s` workspace: `%s` was **discarded** %s.\n\n"+
+		"To `apply` this plan you must run `plan` again.", lock.Project.Path, lock.Workspace, via)
+	if err := l.VCSClient.CreateComment(l.Logger, lock.Pull.BaseRepo, lock.Pull.Num, comment, ""); err != nil {
+		l.Logger.Warn("failed commenting on pull request: %s", err)
+	}
+	return lock, nil
 }
 
 // respond is a helper function to respond and log the response. lvl is the log

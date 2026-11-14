@@ -422,6 +422,48 @@ func TestDeleteLock_CommentSuccess(t *testing.T) {
 			"To `apply` this plan you must run `plan` again."), Eq(""))
 }
 
+func TestDiscardLock_NamesActorInComment(t *testing.T) {
+	RegisterMockTestingT(t)
+	cp := vcsmocks.NewMockClient()
+	dlc := mocks2.NewMockDeleteLockCommand()
+	database, err := boltdb.New(t.TempDir())
+	Ok(t, err)
+	defer closeTestDatabase(t, database)
+
+	pull := models.PullRequest{Num: 7, BaseRepo: models.Repo{FullName: "owner/repo"}}
+	When(dlc.DeleteLock(Any[logging.SimpleLogging](), Eq("id"))).ThenReturn(&models.ProjectLock{
+		Pull:      pull,
+		Workspace: "workspace",
+		Project:   models.Project{Path: "path", RepoFullName: "owner/repo"},
+	}, nil)
+	lc := controllers.LocksController{
+		DeleteLockCommand: dlc,
+		Logger:            logging.NewNoopLogger(t),
+		VCSClient:         cp,
+		Database:          database,
+	}
+
+	lock, err := lc.DiscardLock("id", "alice")
+	Ok(t, err)
+	Equals(t, "path", lock.Project.Path)
+	cp.VerifyWasCalled(Once()).CreateComment(Any[logging.SimpleLogging](), Eq(pull.BaseRepo), Eq(7),
+		Eq("**Warning**: The plan for dir: `path` workspace: `workspace` was **discarded** via the Atlantis UI by `alice`.\n\n"+
+			"To `apply` this plan you must run `plan` again."), Eq(""))
+}
+
+func TestDiscardLock_MissingLock(t *testing.T) {
+	RegisterMockTestingT(t)
+	cp := vcsmocks.NewMockClient()
+	dlc := mocks2.NewMockDeleteLockCommand()
+	When(dlc.DeleteLock(Any[logging.SimpleLogging](), Eq("gone"))).ThenReturn(nil, nil)
+	lc := controllers.LocksController{DeleteLockCommand: dlc, Logger: logging.NewNoopLogger(t), VCSClient: cp}
+
+	lock, err := lc.DiscardLock("gone", "alice")
+	Ok(t, err)
+	Assert(t, lock == nil, "expected no lock")
+	cp.VerifyWasCalled(Never()).CreateComment(Any[logging.SimpleLogging](), Any[models.Repo](), Any[int](), Any[string](), Any[string]())
+}
+
 func closeTestDatabase(t *testing.T, database db.Database) {
 	t.Helper()
 	Ok(t, database.Close())
