@@ -270,7 +270,7 @@ func checkDomain(id Identity, claims map[string]any, allowed []string) error {
 // are checked against the verified hd claim or email.
 func NewGoogleProvider(clientID, clientSecret string, allowedDomains []string) (*OIDCProvider, error) {
 	if len(allowedDomains) == 0 {
-		return nil, errors.New("Google sign-in needs the allowed domains, because anyone can create a Google account")
+		return nil, errors.New("sign-in with Google needs the allowed domains, because anyone can create a Google account")
 	}
 	return NewOIDCProvider(OIDCConfig{
 		ID:             "google",
