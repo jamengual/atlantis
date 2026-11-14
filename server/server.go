@@ -1142,9 +1142,13 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 		ParallelPoolSize:                userConfig.ParallelPoolSize,
 	}
 
+	// driftResults stays a nil interface when detection is off, so the web
+	// UI can tell that drift detection is disabled.
+	var driftResults webui.DriftSource
 	if userConfig.EnableDriftDetection {
 		logger.Info("Drift detection is enabled")
 		driftStorage := drift.NewInMemoryStorage()
+		driftResults = driftStorage
 		apiController.DriftStorage = driftStorage
 		apiController.RemediationService = drift.NewInMemoryRemediationService(driftStorage)
 
@@ -1209,6 +1213,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 				Stops:          jobProcesses,
 				Maintenance:    maintenance,
 				PolicySets:     &globalCfg.PolicySets,
+				Drift:          driftResults,
 			},
 			Actions: &webui.LegacyActions{
 				Discarder:    locksController,

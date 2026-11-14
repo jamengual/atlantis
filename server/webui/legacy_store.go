@@ -84,6 +84,9 @@ type LegacyStore struct {
 	// PolicySets is the policy configuration from the server-side repo
 	// config, for required approvals and owners. Nil when unknown.
 	PolicySets *valid.PolicySets
+	// Drift holds the drift detection API's results. Nil when drift
+	// detection is off.
+	Drift DriftSource
 
 	changesCache sync.Map // job ID -> Changes
 	countsCache  sync.Map // plan JSON path -> cachedCounts

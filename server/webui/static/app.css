@@ -324,3 +324,4 @@ details.confirm.approve[open] > summary { background: var(--accent-soft); }
 .policy-output { margin: 0 14px 14px; }
 .policy-output > summary { cursor: pointer; color: var(--muted); padding: 4px 0; }
 .policy-output .snippet { margin: 6px 0 0; max-height: 28em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.drift-error { display: inline-block; max-width: 48ch; color: var(--del); overflow-wrap: anywhere; }
