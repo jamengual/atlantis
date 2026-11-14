@@ -151,12 +151,14 @@ function styled(text, classes) {
   return span;
 }
 
+// Plan diff markers are always indented, which keeps init output such as
+// "- Using previously-installed ..." from looking like a destroy.
 export function terraformClass(line) {
   const t = line.trimStart();
   if (/^(Plan:|Apply complete!|No changes\.)/.test(t) || /^\$ /.test(line)) return "tf-head";
-  if (/^(\+ |# .* will be created)/.test(t)) return "tf-add";
-  if (/^(- |# .* will be destroyed|Error:|│ Error:)/.test(t)) return "tf-del";
-  if (/^(~ |-\/\+ |\+\/- |# .* will be updated|# .* must be replaced)/.test(t)) return "tf-chg";
+  if (/^\s+(-\/\+|\+\/-|~) /.test(line) || /^# .* (will be updated|must be replaced)/.test(t)) return "tf-chg";
+  if (/^\s+\+ /.test(line) || /^# .* will be created/.test(t)) return "tf-add";
+  if (/^\s+- /.test(line) || /^# .* will be destroyed/.test(t) || /^(│ )?Error:/.test(t)) return "tf-del";
   return "";
 }
 

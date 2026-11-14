@@ -208,7 +208,7 @@ templ statePill(s ProjectState) {
 
 templ ledger(c Changes) {
 	if !c.Known {
-		<span class="ledger muted">Not available</span>
+		<span class="ledger unknown" title="Plan output is not available on this replica">—<span class="sr-only">Plan output not available</span></span>
 	} else {
 		<span class="ledger" aria-label={ fmt.Sprintf("%d to add, %d to change, %d to destroy", c.Add, c.Change+c.Import+c.Forget, c.Destroy) }>
 			<span class="a">+{ itoa(c.Add) }</span>
@@ -545,11 +545,11 @@ templ locksPage(m meta, d locksData) {
 			</header>
 			<div class="scroll">
 				<table class="tbl">
-					<thead><tr><th><span class="sr-only">Select</span></th><th>Project</th><th>Held by</th><th>Pull request</th><th>Held for</th></tr></thead>
+					<thead><tr><th class="pick"><span class="sr-only">Select</span></th><th>Project</th><th>Held by</th><th>Pull request</th><th>Held for</th></tr></thead>
 					<tbody>
 						for _, l := range d.Locks {
 							<tr>
-								<td><input type="checkbox" class="cb" name="id" value={ l.ID } id={ "sel-" + l.ID } aria-label={ "Select " + l.Dir }/></td>
+								<td class="pick"><input type="checkbox" class="cb" name="id" value={ l.ID } id={ "sel-" + l.ID } aria-label={ "Select " + l.Dir }/></td>
 								<td>
 									<div class="title-cell">
 										<label class="mono" for={ "sel-" + l.ID }>{ lockLabel(l) }</label>
@@ -558,8 +558,14 @@ templ locksPage(m meta, d locksData) {
 								</td>
 								<td>{ orUnknown(l.User) }</td>
 								<td>
-									<a href={ templ.SafeURL(pullHref(m.Base, l.Repo.FullName, l.PullNum)) }>#{ itoa(l.PullNum) }</a>
-									if !l.PullTracked {
+									if l.PullTracked {
+										<a href={ templ.SafeURL(pullHref(m.Base, l.Repo.FullName, l.PullNum)) }>#{ itoa(l.PullNum) }</a>
+									} else {
+										if l.PullURL != "" {
+											<a href={ templ.SafeURL(l.PullURL) } rel="noopener noreferrer" target="_blank">#{ itoa(l.PullNum) }</a>
+										} else {
+											<span>#{ itoa(l.PullNum) }</span>
+										}
 										@pill(toneBad, "Not tracked")
 									}
 								</td>
