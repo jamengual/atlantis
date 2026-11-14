@@ -1550,3 +1550,43 @@ func TestPullStatus_PlanHashPreservedAcrossLaterResults(t *testing.T) {
 	Ok(t, err)
 	Equals(t, replanHash, status.Projects[0].PlanHash)
 }
+
+func TestListPullStatuses(t *testing.T) {
+	s := miniredis.RunT(t)
+	rdb := newTestRedis(s)
+
+	statuses, err := rdb.ListPullStatuses()
+	Ok(t, err)
+	Equals(t, 0, len(statuses))
+
+	pull := func(repo string, num int) models.PullRequest {
+		return models.PullRequest{
+			Num: num,
+			BaseRepo: models.Repo{
+				FullName: repo,
+				VCSHost:  models.VCSHost{Hostname: "github.com", Type: models.Github},
+			},
+		}
+	}
+	result := []command.ProjectResult{{Command: command.Plan, RepoRelDir: ".", Workspace: "default", ProjectCommandOutput: command.ProjectCommandOutput{Failure: "failure"}}}
+	_, err = rdb.UpdatePullWithResults(pull("owner/a", 1), result)
+	Ok(t, err)
+	_, err = rdb.UpdatePullWithResults(pull("owner/b", 2), result)
+	Ok(t, err)
+	// Locks and the global apply lock share the keyspace and must be skipped.
+	_, _, err = rdb.TryLock(lock)
+	Ok(t, err)
+	_, err = rdb.LockCommand(command.Apply, time.Now())
+	Ok(t, err)
+	// An unreadable entry is skipped instead of failing the whole list.
+	Ok(t, s.Set("github.com::owner/broken::3", "not json"))
+
+	statuses, err = rdb.ListPullStatuses()
+	Ok(t, err)
+	Equals(t, 2, len(statuses))
+	nums := map[int]string{}
+	for _, st := range statuses {
+		nums[st.Pull.Num] = st.Pull.BaseRepo.FullName
+	}
+	Equals(t, map[int]string{1: "owner/a", 2: "owner/b"}, nums)
+}

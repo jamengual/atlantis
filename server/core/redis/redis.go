@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -446,6 +447,41 @@ func (r *RedisDB) GetPullStatus(pull models.PullRequest) (*models.PullStatus, er
 		return nil, fmt.Errorf("db transaction failed: %w", err)
 	}
 	return pullStatus, nil
+}
+
+// ListPullStatuses returns the status of every stored pull request. Pull
+// status keys have the form {hostname}::{repo}::{num}; lock and command-lock
+// keys share the keyspace and are skipped, as are entries that cannot be
+// decoded. Like List, this scans the nodes the client reaches.
+func (r *RedisDB) ListPullStatuses() ([]models.PullStatus, error) {
+	var statuses []models.PullStatus
+	iter := r.client.Scan(ctx, 0, "*"+pullKeySeparator+"*"+pullKeySeparator+"*", 0).Iterator()
+	for iter.Next(ctx) {
+		key := iter.Val()
+		if strings.HasPrefix(key, "pr/") || strings.HasPrefix(key, "global/") {
+			continue
+		}
+		parts := strings.Split(key, pullKeySeparator)
+		if _, err := strconv.Atoi(parts[len(parts)-1]); err != nil {
+			continue
+		}
+		val, err := r.client.Get(ctx, key).Result()
+		if err == redis.Nil {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("db transaction failed: %w", err)
+		}
+		var p models.PullStatus
+		if err := json.Unmarshal([]byte(val), &p); err != nil {
+			continue
+		}
+		statuses = append(statuses, p)
+	}
+	if err := iter.Err(); err != nil {
+		return nil, fmt.Errorf("db transaction failed: %w", err)
+	}
+	return statuses, nil
 }
 
 func (r *RedisDB) DeletePullStatus(pull models.PullRequest) error {

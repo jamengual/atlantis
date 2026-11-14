@@ -536,6 +536,26 @@ func (b *BoltDB) GetPullStatus(pull models.PullRequest) (*models.PullStatus, err
 	return s, nil
 }
 
+// ListPullStatuses returns the status of every stored pull request. Entries
+// that cannot be decoded are skipped.
+func (b *BoltDB) ListPullStatuses() ([]models.PullStatus, error) {
+	var statuses []models.PullStatus
+	err := b.db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(b.pullsBucketName).ForEach(func(_, v []byte) error {
+			var p models.PullStatus
+			if err := json.Unmarshal(v, &p); err != nil {
+				return nil //nolint:nilerr // skip unreadable entries
+			}
+			statuses = append(statuses, p)
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, fmt.Errorf("DB transaction failed: %w", err)
+	}
+	return statuses, nil
+}
+
 // DeletePullStatus deletes the status for pull.
 func (b *BoltDB) DeletePullStatus(pull models.PullRequest) error {
 	key, err := b.pullKey(pull)

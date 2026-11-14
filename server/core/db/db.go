@@ -24,6 +24,10 @@ type Database interface {
 	UnlockByPull(repoFullName string, pullNum int) ([]models.ProjectLock, error)
 	UpdateProjectStatus(pull models.PullRequest, workspace string, repoRelDir string, newStatus models.ProjectPlanStatus) error
 	GetPullStatus(pull models.PullRequest) (*models.PullStatus, error)
+	// ListPullStatuses returns the stored status of every pull request.
+	// Entries that cannot be decoded are skipped so one bad record does not
+	// hide the rest.
+	ListPullStatuses() ([]models.PullStatus, error)
 	DeletePullStatus(pull models.PullRequest) error
 	UpdatePullWithResults(pull models.PullRequest, newResults []command.ProjectResult) (models.PullStatus, error)
 

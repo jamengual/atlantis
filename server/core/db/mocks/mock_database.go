@@ -130,6 +130,21 @@ func (mr *MockDatabaseMockRecorder) List() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "List", reflect.TypeOf((*MockDatabase)(nil).List))
 }
 
+// ListPullStatuses mocks base method.
+func (m *MockDatabase) ListPullStatuses() ([]models.PullStatus, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListPullStatuses")
+	ret0, _ := ret[0].([]models.PullStatus)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListPullStatuses indicates an expected call of ListPullStatuses.
+func (mr *MockDatabaseMockRecorder) ListPullStatuses() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListPullStatuses", reflect.TypeOf((*MockDatabase)(nil).ListPullStatuses))
+}
+
 // LockCommand mocks base method.
 func (m *MockDatabase) LockCommand(cmdName command.Name, lockTime time.Time) (*command.Lock, error) {
 	m.ctrl.T.Helper()
