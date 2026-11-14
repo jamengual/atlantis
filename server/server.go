@@ -459,8 +459,12 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 	// The web UI can stop running jobs. Without it, nothing tracks processes
 	// and commands run exactly as before.
 	var jobProcesses *jobs.ProcessRegistry
+	// Maintenance windows are set in the web UI and kept in memory on this
+	// replica. Without the UI there are none.
+	var maintenance *locking.Maintenance
 	if slices.Contains(userConfig.Experiments, webUIExperiment) {
 		jobProcesses = jobs.NewProcessRegistry()
+		maintenance = locking.NewMaintenance()
 	}
 
 	distribution := terraform.NewDistribution(userConfig.DefaultTFDistribution)
@@ -827,6 +831,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 
 	projectCommandRunner := &events.DefaultProjectCommandRunner{
 		Processes:               jobProcesses,
+		Maintenance:             maintenance,
 		VcsClient:               vcsClient,
 		VarFileAllowlistChecker: varFileAllowlistChecker,
 		Locker:                  projectLocker,
@@ -1069,6 +1074,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 		PullStatusFetcher:              database,
 		TeamAllowlistChecker:           teamAllowlistChecker,
 		CommentAccess:                  commentAccess,
+		Maintenance:                    maintenance,
 		VarFileAllowlistChecker:        varFileAllowlistChecker,
 		CommitStatusUpdater:            commitStatusUpdater,
 	}
@@ -1201,11 +1207,13 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 				WorkingDir:     workingDir,
 				SharePlanDir:   userConfig.SharePlanDir,
 				Stops:          jobProcesses,
+				Maintenance:    maintenance,
 			},
 			Actions: &webui.LegacyActions{
 				Discarder:   locksController,
 				ApplyLocker: applyLockingClient,
 				Stopper:     jobProcesses,
+				Maintenance: maintenance,
 			},
 			BasePath: strings.TrimRight(parsedURL.Path, "/"),
 			Logger:   logger,

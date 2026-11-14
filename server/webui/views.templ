@@ -65,6 +65,12 @@ func (m meta) CanStop(j Job) bool {
 	return j.Stoppable() && m.canStop != nil && m.canStop(j)
 }
 
+// CanMaintain reports whether the user may start and end maintenance
+// windows.
+func (m meta) CanMaintain() bool {
+	return m.can != nil && m.can(webauth.ActionMaintenance, "")
+}
+
 // CanLockApplies reports whether the user may lock and unlock applies.
 func (m meta) CanLockApplies() bool {
 	return m.can != nil && m.can(webauth.ActionLockApplies, "")
@@ -369,6 +375,157 @@ templ applyBanner(m meta, al ApplyLock) {
 	}
 }
 
+// maintenanceScope describes what a window covers.
+func maintenanceScope(w MaintenanceWindow) string {
+	if w.RepoWide() {
+		return "Whole repository"
+	}
+	var parts []string
+	if w.Dir != "" {
+		parts = append(parts, "directory "+w.Dir)
+	}
+	if w.Workspace != "" {
+		parts = append(parts, "workspace "+w.Workspace)
+	}
+	if w.ProjectName != "" {
+		parts = append(parts, "project "+w.ProjectName)
+	}
+	s := strings.Join(parts, ", ")
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+func maintenanceBlocks(w MaintenanceWindow) string {
+	if w.Plans {
+		return "Plans and applies"
+	}
+	return "Applies"
+}
+
+func maintenanceEnds(now time.Time, w MaintenanceWindow) string {
+	if w.Until.IsZero() {
+		return "When someone ends it"
+	}
+	return "In " + remaining(w.Until.Sub(now)) + " (" + w.Until.UTC().Format("Jan 2 15:04 MST") + ")"
+}
+
+// remaining formats the time left, rounded so a window set for 4 hours
+// reads "4h" rather than "3h" a minute later.
+func remaining(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "under a minute"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Round(time.Minute).Minutes()))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Round(time.Hour).Hours()))
+	default:
+		return fmt.Sprintf("%dd", int((d+12*time.Hour)/(24*time.Hour)))
+	}
+}
+
+const maintenanceNote = "Maintenance windows are kept in memory on this replica. They only block commands this replica runs, and they end when it restarts."
+
+// maintenanceBanner lists the active maintenance windows, with a link to
+// manage them.
+templ maintenanceBanner(m meta, windows []MaintenanceWindow) {
+	if len(windows) > 0 {
+		<section class="banner maint" role="status" aria-labelledby="maint-b">
+			@icon("lock")
+			<div class="grow">
+				<p id="maint-b"><b>{ itoa(len(windows)) } maintenance { plural(len(windows), "window is", "windows are") } active.</b></p>
+				<ul class="maint-list">
+					for _, w := range windows {
+						<li>
+							<b>{ w.Repo.FullName }</b>
+							<span class="muted">· { maintenanceScope(w) } · { maintenanceBlocks(w) } frozen</span>
+							<br/><span>{ w.Reason }</span> <small class="muted">Set by { w.By } { ago(m.Now, w.Since) } · Ends: { maintenanceEnds(m.Now, w) }</small>
+						</li>
+					}
+				</ul>
+			</div>
+			<a class="btn sm" href={ m.url("/locks#maintenance") }>Manage</a>
+		</section>
+	}
+}
+
+// maintenancePanel lists maintenance windows and lets permitted users start
+// and end them.
+templ maintenancePanel(m meta, d locksData) {
+	<section class="panel" id="maintenance" aria-labelledby="maint-h">
+		<header>
+			<h2 id="maint-h">Maintenance windows</h2>
+			<span class="muted">Freeze applies, and optionally plans, in a repository or one project</span>
+		</header>
+		if m.CanMaintain() {
+			<details class="maint-new">
+				<summary class="btn sm">Start maintenance…</summary>
+				<form method="post" action={ m.url("/maintenance") } class="maint-form">
+					<input type="hidden" name="return" value={ string(m.url("/locks")) }/>
+					<label for="mw-repo">Repository</label>
+					<input id="mw-repo" name="repo" list="mw-repos" required maxlength="200" placeholder="acme/infra" autocomplete="off"/>
+					<datalist id="mw-repos">
+						for _, r := range d.KnownRepos {
+							<option value={ r }></option>
+						}
+					</datalist>
+					<label for="mw-dir">Directory <span class="muted">optional</span></label>
+					<input id="mw-dir" name="dir" maxlength="500" placeholder="network/prod" autocomplete="off"/>
+					<label for="mw-ws">Workspace <span class="muted">optional</span></label>
+					<input id="mw-ws" name="workspace" maxlength="200" placeholder="default" autocomplete="off"/>
+					<label for="mw-proj">Project <span class="muted">optional</span></label>
+					<input id="mw-proj" name="project" maxlength="200" autocomplete="off"/>
+					<label for="mw-reason">Reason</label>
+					<textarea id="mw-reason" name="reason" required maxlength="300" rows="2" placeholder="Upgrading the state bucket; see INC-4211"></textarea>
+					<label for="mw-until">Ends</label>
+					<select id="mw-until" name="duration">
+						for _, du := range maintenanceDurations {
+							<option value={ du.Key }>{ du.Label }</option>
+						}
+					</select>
+					<label class="check"><input type="checkbox" class="cb" name="plans"/> Freeze plans too</label>
+					<p class="muted hint">Leave directory, workspace and project empty to freeze the whole repository. Applies, imports and state rm, and plans if you check the box, are rejected with a pull request comment that gives your reason, your name and the end time.</p>
+					<button class="btn danger solid" type="submit">Start maintenance</button>
+				</form>
+			</details>
+		}
+		<div class="scroll">
+			<table class="tbl">
+				<thead><tr><th>Repository</th><th>Scope</th><th>Frozen</th><th>Reason</th><th>Set by</th><th>Ends</th><th><span class="sr-only">Actions</span></th></tr></thead>
+				<tbody>
+					for _, w := range d.Maintenance {
+						<tr>
+							<td class="mono">{ w.Repo.FullName }</td>
+							<td>{ maintenanceScope(w) }</td>
+							<td>{ maintenanceBlocks(w) }</td>
+							<td class="reason">{ w.Reason }</td>
+							<td>{ w.By } <small class="muted">{ ago(m.Now, w.Since) }</small></td>
+							<td>{ maintenanceEnds(m.Now, w) }</td>
+							<td class="act">
+								if m.CanMaintain() {
+									<details class="confirm">
+										<summary class="btn sm">End…</summary>
+										<form method="post" action={ m.url("/maintenance/" + w.ID + "/end") } class="inline-confirm">
+											<input type="hidden" name="return" value={ string(m.url("/locks")) }/>
+											<span>Commands in { w.Repo.FullName } run again as soon as the window ends.</span>
+											<button class="btn sm solid" type="submit">End maintenance</button>
+										</form>
+									</details>
+								}
+							</td>
+						</tr>
+					}
+					if len(d.Maintenance) == 0 {
+						<tr><td colspan="7" class="empty">No maintenance windows. Start one to stop applies during an incident or an upgrade.</td></tr>
+					}
+				</tbody>
+			</table>
+		</div>
+		if !m.Caps.SharedMaintenance {
+			@capabilityNote(maintenanceNote)
+		}
+	</section>
+}
+
 templ capabilityNote(text string) {
 	<p class="capnote">{ text }</p>
 }
@@ -381,6 +538,8 @@ type overviewData struct {
 	Running   []Job
 	ApplyLock ApplyLock
 	Attention []attentionItem
+	// Maintenance is the active maintenance windows.
+	Maintenance []MaintenanceWindow
 }
 
 templ overviewPage(m meta, d overviewData) {
@@ -392,6 +551,7 @@ templ overviewPage(m meta, d overviewData) {
 			</div>
 		</div>
 		@applyBanner(m, d.ApplyLock)
+		@maintenanceBanner(m, d.Maintenance)
 		@replicaStrip(m)
 		<div class="cols">
 			<section class="panel" aria-labelledby="att-h" id="attention" hx-get={ string(m.url("")) } hx-trigger="every 15s" hx-select="#attention" hx-target="this" hx-swap="outerHTML">
@@ -503,7 +663,16 @@ templ pullsPage(m meta, d pullsData) {
 	}
 }
 
-templ pullPage(m meta, p PullRequest) {
+type pullData struct {
+	Pull PullRequest
+	// Locks is every lock the pull request holds.
+	Locks []Lock
+	// Maintenance is the active windows in the pull request's repository.
+	Maintenance []MaintenanceWindow
+}
+
+templ pullPage(m meta, d pullData) {
+	{{ p := d.Pull }}
 	@layout(m) {
 		<div class="prhead">
 			<h1>{ p.Repo.FullName } #{ itoa(p.Num) }</h1>
@@ -520,8 +689,14 @@ templ pullPage(m meta, p PullRequest) {
 				if p.URL != "" {
 					<a href={ templ.SafeURL(p.URL) } rel="noopener noreferrer" target="_blank">Open pull request</a>
 				}
+				if len(d.Locks) > 0 && m.CanUnlock(p.Repo) {
+					<span class="grow-right">
+						@unlockAllControl(m, p, d.Locks)
+					</span>
+				}
 			</div>
 		</div>
+		@maintenanceBanner(m, d.Maintenance)
 		<section class="panel" id="projects" hx-get={ string(templ.SafeURL(pullHref(m.Base, p.Repo, p.Num))) } hx-trigger="every 5s" hx-select="#projects" hx-target="this" hx-swap="outerHTML">
 			<header><h2>Projects</h2><span class="muted">{ itoa(len(p.Projects)) }</span></header>
 			<div class="scroll">
@@ -775,6 +950,25 @@ templ unlockControl(m meta, id string, returnTo string) {
 	</details>
 }
 
+// unlockAllControl unlocks every lock a pull request holds, after listing
+// them.
+templ unlockAllControl(m meta, p PullRequest, locks []Lock) {
+	<details class="confirm" id="unlock-all">
+		<summary class="btn sm danger">Unlock all…</summary>
+		<form method="post" action={ m.url("/locks/discard") } class="inline-confirm">
+			<input type="hidden" name="pull" value={ pullKey(p.Repo, p.Num) }/>
+			<input type="hidden" name="return" value={ pullHref(m.Base, p.Repo, p.Num) }/>
+			<span>Discards the saved plans and releases { itoa(len(locks)) } { plural(len(locks), "lock", "locks") }. Atlantis comments on the pull request for each one:</span>
+			<ul class="lock-names">
+				for _, l := range locks {
+					<li><span class="mono">{ lockLabel(l) }</span> <span class="muted">workspace { l.Workspace }</span></li>
+				}
+			</ul>
+			<button class="btn sm danger solid" type="submit">Release { itoa(len(locks)) } { plural(len(locks), "lock", "locks") }</button>
+		</form>
+	</details>
+}
+
 templ stopControl(m meta, j Job, returnTo string) {
 	<details class="confirm">
 		<summary class="btn sm danger">Stop…</summary>
@@ -801,8 +995,12 @@ templ jobStatus(j Job) {
 }
 
 type locksData struct {
-	Locks     []Lock
-	ApplyLock ApplyLock
+	Locks       []Lock
+	Groups      []lockGroup
+	ApplyLock   ApplyLock
+	Maintenance []MaintenanceWindow
+	// KnownRepos suggests repositories in the maintenance form.
+	KnownRepos []string
 }
 
 templ locksPage(m meta, d locksData) {
@@ -814,6 +1012,7 @@ templ locksPage(m meta, d locksData) {
 			</div>
 		</div>
 		@applyBanner(m, d.ApplyLock)
+		@maintenancePanel(m, d)
 		<form method="post" action={ m.url("/locks/discard") } class="panel" id="lock-list">
 			<input type="hidden" name="return" value={ string(m.url("/locks")) }/>
 			<header>
@@ -835,39 +1034,31 @@ templ locksPage(m meta, d locksData) {
 				<table class="tbl">
 					<thead><tr><th class="pick"><span class="sr-only">Select</span></th><th>Project</th><th>Held by</th><th>Pull request</th><th>Held for</th></tr></thead>
 					<tbody>
-						for _, l := range d.Locks {
-							<tr>
-								<td class="pick">
-									if m.CanUnlock(l.Repo) {
-										<input type="checkbox" class="cb" name="id" value={ l.ID } id={ "sel-" + l.ID } aria-label={ "Select " + l.Dir }/>
-									}
-								</td>
-								<td>
-									<div class="title-cell">
-										<label class="mono" for={ "sel-" + l.ID }>{ lockLabel(l) }</label>
-										<small>{ l.Repo.FullName } · workspace { l.Workspace }</small>
+						for _, g := range d.Groups {
+							<tr class="lockgroup">
+								<td colspan="5">
+									<div class="groupbar">
+										<span><b>{ g.Repo.FullName } #{ itoa(g.PullNum) }</b> <span class="muted">{ itoa(len(g.Locks)) } { plural(len(g.Locks), "lock", "locks") }</span></span>
+										if len(g.Locks) > 1 && m.CanUnlock(g.Repo) {
+											<details class="confirm">
+												<summary class="btn sm danger">Release all…</summary>
+												<div class="inline-confirm">
+													<span>Discards the saved plans of every project { g.Repo.FullName } #{ itoa(g.PullNum) } has locked, and comments on the pull request for each:</span>
+													<ul class="lock-names">
+														for _, l := range g.Locks {
+															<li><span class="mono">{ lockLabel(l) }</span> <span class="muted">workspace { l.Workspace }</span></li>
+														}
+													</ul>
+													<button class="btn sm danger solid" type="submit" name="pull" value={ pullKey(g.Repo, g.PullNum) }>Release { itoa(len(g.Locks)) } locks</button>
+												</div>
+											</details>
+										}
 									</div>
 								</td>
-								<td>{ orUnknown(l.User) }</td>
-								<td>
-									if l.PullTracked {
-										<a href={ templ.SafeURL(pullHref(m.Base, l.Repo, l.PullNum)) }>#{ itoa(l.PullNum) }</a>
-									} else {
-										if l.PullURL != "" {
-											<a href={ templ.SafeURL(l.PullURL) } rel="noopener noreferrer" target="_blank">#{ itoa(l.PullNum) }</a>
-										} else {
-											<span>#{ itoa(l.PullNum) }</span>
-										}
-										@pill(toneBad, "Not tracked")
-									}
-								</td>
-								<td class="num">
-									{ held(m.Now, l.Since) }
-									if lockStale(m.Now, l) {
-										@pill(toneWarn, "Stale")
-									}
-								</td>
 							</tr>
+							for _, l := range g.Locks {
+								@lockRow(m, l)
+							}
 						}
 						if len(d.Locks) == 0 {
 							<tr><td colspan="5" class="empty">No projects are locked. A lock appears when a pull request is planned.</td></tr>
@@ -878,6 +1069,41 @@ templ locksPage(m meta, d locksData) {
 		</form>
 		@capabilityNote("Locks don't expire. A lock is flagged when its pull request is no longer tracked or it has been held for over 7 days.")
 	}
+}
+
+templ lockRow(m meta, l Lock) {
+	<tr>
+		<td class="pick">
+			if m.CanUnlock(l.Repo) {
+				<input type="checkbox" class="cb" name="id" value={ l.ID } id={ "sel-" + l.ID } aria-label={ "Select " + l.Dir }/>
+			}
+		</td>
+		<td>
+			<div class="title-cell">
+				<label class="mono" for={ "sel-" + l.ID }>{ lockLabel(l) }</label>
+				<small>{ l.Repo.FullName } · workspace { l.Workspace }</small>
+			</div>
+		</td>
+		<td>{ orUnknown(l.User) }</td>
+		<td>
+			if l.PullTracked {
+				<a href={ templ.SafeURL(pullHref(m.Base, l.Repo, l.PullNum)) }>#{ itoa(l.PullNum) }</a>
+			} else {
+				if l.PullURL != "" {
+					<a href={ templ.SafeURL(l.PullURL) } rel="noopener noreferrer" target="_blank">#{ itoa(l.PullNum) }</a>
+				} else {
+					<span>#{ itoa(l.PullNum) }</span>
+				}
+				@pill(toneBad, "Not tracked")
+			}
+		</td>
+		<td class="num">
+			{ held(m.Now, l.Since) }
+			if lockStale(m.Now, l) {
+				@pill(toneWarn, "Stale")
+			}
+		</td>
+	</tr>
 }
 
 type jobsData struct {
@@ -1256,5 +1482,36 @@ templ accessPage(m meta, d accessData) {
 				</div>
 			</section>
 		}
+	}
+}
+
+templ discardResultPage(m meta, res discardResult) {
+	@layout(m) {
+		<div class="head">
+			<div>
+				<h1>Some locks weren't unlocked</h1>
+				<p>Unlocked { itoa(len(res.Unlocked)) } and failed to unlock { itoa(len(res.Failed)) }. Check that the lock database is reachable, then try the failed ones again.</p>
+			</div>
+		</div>
+		<section class="panel" id="discard-result">
+			<header><h2>Not unlocked</h2></header>
+			<ul class="result-list">
+				for _, f := range res.Failed {
+					<li><span class="mono">{ f.Label }</span><br/><small class="bad-text">{ f.Err }</small></li>
+				}
+			</ul>
+			if len(res.Unlocked) > 0 {
+				<header><h2>Unlocked</h2><span class="muted">Their plans were discarded and the pull requests got a comment</span></header>
+				<ul class="result-list">
+					for _, u := range res.Unlocked {
+						<li class="mono">{ u }</li>
+					}
+				</ul>
+			}
+			if res.Missing > 0 {
+				<p class="capnote">{ itoa(res.Missing) } { plural(res.Missing, "lock was", "locks were") } already unlocked.</p>
+			}
+		</section>
+		<p><a class="btn" href={ templ.SafeURL(res.Return) }>Go back</a></p>
 	}
 }

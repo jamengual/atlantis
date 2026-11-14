@@ -25,15 +25,19 @@ const (
 	// ActionStopJob is stopping a running plan, apply, policy check, or
 	// workflow hook.
 	ActionStopJob Action = "stop_job"
+	// ActionMaintenance is starting and ending maintenance windows, which
+	// freeze applies, and optionally plans, in a repository or project.
+	ActionMaintenance Action = "maintenance"
 )
 
 // Actions lists every action, in the order the UI explains them.
-var Actions = []Action{ActionView, ActionUnlock, ActionStopJob, ActionLockApplies}
+var Actions = []Action{ActionView, ActionUnlock, ActionStopJob, ActionMaintenance, ActionLockApplies}
 
 var defaultRequirements = map[Action]Role{
 	ActionView:        RoleViewer,
 	ActionUnlock:      RoleOperator,
 	ActionStopJob:     RoleOperator,
+	ActionMaintenance: RoleAdmin,
 	ActionLockApplies: RoleAdmin,
 }
 
@@ -54,6 +58,8 @@ func (a Action) Describe() string {
 		return "Lock and unlock applies for every repository"
 	case ActionStopJob:
 		return "Stop running plans, applies, and hooks"
+	case ActionMaintenance:
+		return "Start and end maintenance windows that freeze applies"
 	}
 	return string(a)
 }
@@ -238,7 +244,7 @@ func NewPolicy(c PolicyConfig) (*Policy, error) {
 		for _, req := range []struct {
 			action Action
 			value  string
-		}{{ActionView, a.Permissions.View}, {ActionUnlock, a.Permissions.Unlock}, {ActionStopJob, a.Permissions.StopJob}, {ActionLockApplies, a.Permissions.LockApplies}} {
+		}{{ActionView, a.Permissions.View}, {ActionUnlock, a.Permissions.Unlock}, {ActionStopJob, a.Permissions.StopJob}, {ActionMaintenance, a.Permissions.Maintenance}, {ActionLockApplies, a.Permissions.LockApplies}} {
 			if req.value == "" {
 				continue
 			}

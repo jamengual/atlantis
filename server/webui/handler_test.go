@@ -31,6 +31,7 @@ type fakeStore struct {
 	logs     map[string][]string
 	liveLogs map[string]chan webui.LogLine
 	plans    map[webui.ProjectRef]*webui.ProjectPlan
+	maint    []webui.MaintenanceWindow
 	err      error
 }
 
@@ -64,6 +65,9 @@ func (f *fakeStore) GetPlan(ctx context.Context, repo webui.Repository, num int,
 }
 func (f *fakeStore) ListLocks(context.Context) ([]webui.Lock, error)    { return f.locks, f.err }
 func (f *fakeStore) ApplyLock(context.Context) (webui.ApplyLock, error) { return f.apply, nil }
+func (f *fakeStore) ListMaintenance(context.Context) []webui.MaintenanceWindow {
+	return f.maint
+}
 func (f *fakeStore) ListJobs(_ context.Context, jf webui.JobFilter) []webui.Job {
 	var out []webui.Job
 	for _, j := range f.jobs {
@@ -107,6 +111,45 @@ type fakeActions struct {
 	// stops records StopJob calls by job ID, with the actor.
 	stops   map[string]string
 	stopErr error
+	// failIDs makes DiscardLock fail for these lock IDs.
+	failIDs map[string]bool
+	// started and ended record maintenance window requests.
+	started  []webui.MaintenanceRequest
+	startBy  []string
+	startErr error
+	ended    []string
+	store    *fakeStore
+}
+
+func (f *fakeActions) StartMaintenance(req webui.MaintenanceRequest, actor string) (webui.MaintenanceWindow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.startErr != nil {
+		return webui.MaintenanceWindow{}, f.startErr
+	}
+	f.started = append(f.started, req)
+	f.startBy = append(f.startBy, actor)
+	w := webui.MaintenanceWindow{ID: "mw-" + req.Repo.FullName, Repo: req.Repo, Dir: req.Dir, Workspace: req.Workspace, ProjectName: req.ProjectName,
+		Plans: req.Plans, Reason: req.Reason, By: actor, Since: now, Until: req.Until}
+	if f.store != nil {
+		f.store.maint = append(f.store.maint, w)
+	}
+	return w, nil
+}
+
+func (f *fakeActions) EndMaintenance(id string) (webui.MaintenanceWindow, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.store != nil {
+		for i, w := range f.store.maint {
+			if w.ID == id {
+				f.store.maint = append(f.store.maint[:i], f.store.maint[i+1:]...)
+				f.ended = append(f.ended, id)
+				return w, true, nil
+			}
+		}
+	}
+	return webui.MaintenanceWindow{}, false, nil
 }
 
 func (f *fakeActions) StopJob(id, actor string) (webui.JobStop, bool, error) {
@@ -133,6 +176,9 @@ func (f *fakeActions) DiscardLock(id, actor string) (bool, error) {
 	}
 	if f.missing[id] {
 		return false, nil
+	}
+	if f.failIDs[id] {
+		return false, errors.New("redis: connection reset for " + id)
 	}
 	f.discarded = append(f.discarded, id)
 	f.actors = append(f.actors, actor)

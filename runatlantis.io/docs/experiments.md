@@ -103,9 +103,9 @@ Results currently use in-memory storage and are lost on restart. Drift detection
 
 ## Web UI
 
-Add `web-ui` to `experiments` to serve a new web UI at `/ui`. The existing UI at `/` is unchanged. The new UI shows pull requests with per-project status and plan changes, project locks with single and bulk unlock, the global apply lock, live job logs with a way to stop a running job, and the health of the replica serving the page.
+Add `web-ui` to `experiments` to serve a new web UI at `/ui`. The existing UI at `/` is unchanged. The new UI shows pull requests with per-project status and plan changes, project locks with single and bulk unlock, the global apply lock, maintenance windows, live job logs with a way to stop a running job, and the health of the replica serving the page.
 
-Without [web UI sign-in](#web-ui-sign-in), the UI uses the same access control as the existing UI: [basic auth](server-configuration.md#web-basic-auth) when enabled, and nothing otherwise. In that case anyone who can reach `/ui` can discard plans, stop jobs, and lock applies. Actions reject cross-origin requests, and pages are served with a Content Security Policy that blocks inline scripts and styles. The pull request comment for a discarded plan names the user who discarded it.
+Without [web UI sign-in](#web-ui-sign-in), the UI uses the same access control as the existing UI: [basic auth](server-configuration.md#web-basic-auth) when enabled, and nothing otherwise. In that case anyone who can reach `/ui` can discard plans, stop jobs, start maintenance windows, and lock applies. Actions reject cross-origin requests, and pages are served with a Content Security Policy that blocks inline scripts and styles. The pull request comment for a discarded plan names the user who discarded it.
 
 Locks, the apply lock, and pull request status come from the locking database, so every replica shows the same values. Job lists and logs live in memory on the replica that ran the job and are cleared on restart. With several replicas behind a load balancer, a job page may show "no output" when the request reaches a different replica. The pages are built on the [ADR 0005](/contributing/adr/0005-use-durable-storage-with-one-data-model.md) data model so that durable storage can add history, cluster-wide jobs, and an audit log without changing them.
 
@@ -122,6 +122,34 @@ The job log and page say who stopped the job, and the pull request comment for t
 Stopping needs the operator role by default. Set `access.permissions.stop_job`, or `permissions.stop_job` on a `repos` entry, to change that (see [the access policy](#access-policy-in-the-server-side-repo-config)).
 
 Each job runs on one replica, and only that replica can stop it. With several replicas behind a load balancer, a request that reaches another replica is told that replica isn't running the job; try again. Atlantis only tracks processes to stop when the `web-ui` experiment is on; it starts each Terraform command in its own process group then. On Windows, stopping a job kills its process right away.
+
+### Unlocking every lock of a pull request
+
+A pull request page has an **Unlock all** button when the pull request holds locks. Its confirmation lists every project and workspace that will be released. On the **Locks** page, locks are grouped by pull request: select several and choose **Unlock selected**, or choose **Release all** on a pull request that holds more than one lock.
+
+Each lock is released as if it were unlocked on its own: its plan is discarded and Atlantis comments on the pull request. You need permission to unlock every lock in the request, or none is released. If the lock database fails partway, Atlantis still tries the remaining locks, then lists which locks were unlocked and which weren't, with the error for each.
+
+### Maintenance windows
+
+A maintenance window freezes `atlantis apply`, `atlantis import`, and `atlantis state rm` in one repository, or in one directory, workspace, or project of it, for example during an incident or an upgrade. Optionally it freezes plans too, including autoplans. Start one from **Start maintenance** on the **Locks** page with a required reason and an optional end time. Active windows are listed on the overview, the **Locks** page, and the pages of pull requests in the affected repository.
+
+While a window is active, a frozen command is rejected with a pull request comment that gives the reason, who started the window, and when it ends:
+
+```text
+Error: atlantis apply is blocked by a maintenance window on acme/infra.
+Scope: the whole repository
+Reason: Upgrading the state bucket; see INC-4211
+Set by: Ada Admin at 2026-11-13 14:00 UTC
+Ends: 2026-11-13 18:00 UTC
+```
+
+A repo-wide window rejects the command before Atlantis clones the repository. A window for a directory, workspace, or project fails only the projects it covers, so other projects in the same pull request still run. Windows don't touch project locks or the [global apply lock](locking.md); use the apply lock to stop applies in every repository at once.
+
+Starting and ending windows needs the admin role by default. Set `access.permissions.maintenance` to change that. It is set only at the top level, like the apply lock, because a window can block everyone who works in a repository.
+
+::: warning
+Maintenance windows are kept in memory on the replica where they were started. They only block commands that replica runs, and they end when it restarts. With several replicas, a webhook that reaches another replica isn't blocked. Durable storage ([ADR 0005](/contributing/adr/0005-use-durable-storage-with-one-data-model.md)) will share them across replicas.
+:::
 
 To disable the new UI, remove `web-ui` from `experiments` and restart. Routes under `/ui` then return HTTP 404.
 
@@ -148,7 +176,7 @@ Web UI sign-in replaces basic auth for the pages at `/ui` with your identity pro
 | --- | --- |
 | Viewer | See pull requests, plans, locks, and job logs |
 | Operator | Also discard plans, unlock projects, and stop running jobs |
-| Admin | Also lock and unlock applies for every repository |
+| Admin | Also start and end maintenance windows, and lock and unlock applies for every repository |
 
 Roles come from [`--web-role-admins`](server-configuration.md#web-role-admins), [`--web-role-operators`](server-configuration.md#web-role-operators), and [`--web-role-viewers`](server-configuration.md#web-role-viewers). Each rule is `group:NAME` (or a bare `NAME`) for your identity provider's groups, `github:ORG` or `github:ORG/TEAM` for GitHub, `email:ADDRESS`, `domain:example.com`, or `*` for everyone who signed in. Email and domain rules only match emails the provider marks as verified. The highest matching role wins. People who match no rule are turned away unless you set [`--web-role-default`](server-configuration.md#web-role-default). Atlantis refuses to start with sign-in enabled and no role rules.
 
@@ -180,6 +208,7 @@ access:
     view: viewer
     unlock: operator
     stop_job: operator
+    maintenance: admin
     lock_applies: admin
   enforce_in_pr_comments: true          # also check "atlantis unlock" comments
 
@@ -198,7 +227,7 @@ repos:
 ```
 
 - Each rule matches exactly one of `group`, `github` (`ORG` or `ORG/TEAM`), `github_user`, `email`, `domain`, or `everyone: true`.
-- A `repos` entry can grant extra roles for matching repositories and require a different role to unlock or to stop jobs there. Viewing and the apply lock cover the whole server, so they are set only at the top level. When several entries match, the last one that sets a requirement wins, as with other repo settings.
+- A `repos` entry can grant extra roles for matching repositories and require a different role to unlock or to stop jobs there. Viewing, maintenance windows, and the apply lock cover the whole server, so they are set only at the top level. When several entries match, the last one that sets a requirement wins, as with other repo settings.
 - With `enforce_in_pr_comments: true`, an `atlantis unlock` comment is checked against the same unlock rule, matching the commenter's GitHub user and teams. Identity provider groups and emails don't apply to comments.
 - When sign-in is on, the existing UI's pages redirect to the new UI, and its unlock and apply lock actions follow this policy too.
 - The **Access** page in the UI shows the policy in plain words and what you can do in each repository. Atlantis checks the policy at startup and refuses to start with mistakes such as a rule with two attributes or an unknown role.

@@ -14,6 +14,7 @@ import (
 	"github.com/drmaxgit/go-azuredevops/azuredevops"
 	"github.com/google/go-github/v88/github"
 	"github.com/runatlantis/atlantis/server/core/config/valid"
+	"github.com/runatlantis/atlantis/server/core/locking"
 	"github.com/runatlantis/atlantis/server/events/command"
 	"github.com/runatlantis/atlantis/server/events/models"
 	"github.com/runatlantis/atlantis/server/events/vcs"
@@ -142,6 +143,30 @@ type DefaultCommandRunner struct {
 	CommentAccess           CommentAccessChecker
 	VarFileAllowlistChecker *VarFileAllowlistChecker `validate:"required"`
 	CommitStatusUpdater     CommitStatusUpdater      `validate:"required"`
+	// Maintenance holds the maintenance windows set in the web UI. Commands
+	// that a repo-wide window freezes are rejected here, before cloning;
+	// windows for one project are checked by the project command runner.
+	// Nil means there are none.
+	Maintenance *locking.Maintenance
+}
+
+// rejectedByMaintenance comments and returns true when a repo-wide
+// maintenance window freezes the command in the pull request's repository.
+func (c *DefaultCommandRunner) rejectedByMaintenance(ctx *command.Context, cmdName command.Name) bool {
+	w, blocked := c.Maintenance.BlockingRepo(cmdName, ctx.Pull.BaseRepo)
+	if !blocked {
+		return false
+	}
+	ctx.Log.Info("rejecting %q, maintenance window %q by %q is active", cmdName.String(), w.ID, w.By)
+	msg := fmt.Sprintf("```\nError: %s\n```", w.Explain(cmdName))
+	commentCmd := cmdName
+	if commentCmd == command.Autoplan {
+		commentCmd = command.Plan
+	}
+	if err := c.VCSClient.CreateComment(ctx.Log, ctx.Pull.BaseRepo, ctx.Pull.Num, msg, commentCmd.String()); err != nil {
+		ctx.Log.Err("unable to comment on pull request: %s", err)
+	}
+	return true
 }
 
 // RunAutoplanCommand runs plan and policy_checks when a pull request is opened or updated.
@@ -209,6 +234,10 @@ func (c *DefaultCommandRunner) RunAutoplanCommand(baseRepo models.Repo, headRepo
 			ctx.Log.Info("Pull/merge request has disable auto plan label '%s' so not running autoplan.", c.DisableAutoplanLabel)
 			return
 		}
+	}
+
+	if c.rejectedByMaintenance(ctx, command.Autoplan) {
+		return
 	}
 
 	ctx.Log.Info("Running autoplan...")
@@ -589,6 +618,9 @@ func (c *DefaultCommandRunner) RunCommentCommand(baseRepo models.Repo, maybeHead
 	}
 
 	if !c.validateCommentCommand(ctx, baseRepo, pullNum, user, cmd, !targetInitiallyIgnored) {
+		return
+	}
+	if !targetInitiallyIgnored && c.rejectedByMaintenance(ctx, cmd.Name) {
 		return
 	}
 

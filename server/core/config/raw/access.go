@@ -25,6 +25,7 @@ import (
 //	  permissions:
 //	    unlock: operator
 //	    stop_job: operator
+//	    maintenance: admin
 //	    lock_applies: admin
 //	  enforce_in_pr_comments: true
 type Access struct {
@@ -63,6 +64,7 @@ type AccessPermissions struct {
 	Unlock      string `yaml:"unlock,omitempty" json:"unlock,omitempty"`
 	LockApplies string `yaml:"lock_applies,omitempty" json:"lock_applies,omitempty"`
 	StopJob     string `yaml:"stop_job,omitempty" json:"stop_job,omitempty"`
+	Maintenance string `yaml:"maintenance,omitempty" json:"maintenance,omitempty"`
 }
 
 var accessRoleNames = []string{"none", "viewer", "operator", "admin"}
@@ -121,7 +123,7 @@ func (a Access) Validate() error {
 		return err
 	}
 	if a.Permissions != nil {
-		for _, p := range []struct{ name, value string }{{"view", a.Permissions.View}, {"unlock", a.Permissions.Unlock}, {"stop_job", a.Permissions.StopJob}, {"lock_applies", a.Permissions.LockApplies}} {
+		for _, p := range []struct{ name, value string }{{"view", a.Permissions.View}, {"unlock", a.Permissions.Unlock}, {"stop_job", a.Permissions.StopJob}, {"maintenance", a.Permissions.Maintenance}, {"lock_applies", a.Permissions.LockApplies}} {
 			if err := validRoleName("access.permissions."+p.name, p.value); err != nil {
 				return err
 			}
@@ -147,6 +149,9 @@ func (a RepoAccess) Validate(repoID string) error {
 	}
 	if a.Permissions.LockApplies != "" {
 		return fmt.Errorf("%s.permissions.lock_applies: the apply lock covers every repo; set it in the top-level access section", where)
+	}
+	if a.Permissions.Maintenance != "" {
+		return fmt.Errorf("%s.permissions.maintenance: maintenance windows are managed for every repo; set it in the top-level access section", where)
 	}
 	for _, p := range []struct{ name, value string }{{"unlock", a.Permissions.Unlock}, {"stop_job", a.Permissions.StopJob}} {
 		if err := validRoleName(where+".permissions."+p.name, p.value); err != nil {
@@ -186,6 +191,7 @@ func (p *AccessPermissions) toValid() valid.AccessPermissions {
 		Unlock:      strings.ToLower(p.Unlock),
 		LockApplies: strings.ToLower(p.LockApplies),
 		StopJob:     strings.ToLower(p.StopJob),
+		Maintenance: strings.ToLower(p.Maintenance),
 	}
 }
 
