@@ -1765,6 +1765,106 @@ ATLANTIS_WEB_BASIC_AUTH=true
 
 Enable Basic Authentication on the Atlantis web service.
 
+### `--web-github-allowed-orgs` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-github-allowed-orgs=acme
+# or
+ATLANTIS_WEB_GITHUB_ALLOWED_ORGS=acme
+```
+
+Only members of these GitHub organizations can sign in with GitHub. Organizations become groups named `ORG`, and teams become `ORG/TEAM`; membership in a child team also counts for its parent team. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-github-client-id` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-github-client-id=Iv1.0123456789abcdef
+# or
+ATLANTIS_WEB_GITHUB_CLIENT_ID=Iv1.0123456789abcdef
+```
+
+Client ID of the GitHub OAuth app, or of a GitHub App with user authorization, used for web UI sign-in. Register `https://ATLANTIS_URL/ui/auth/callback/github` as its callback URL. Uses [`--gh-hostname`](#gh-hostname) for GitHub Enterprise. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-github-client-secret` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-github-client-secret=SECRET
+# or
+ATLANTIS_WEB_GITHUB_CLIENT_SECRET=SECRET
+```
+
+Client secret for GitHub sign-in. Set it with the environment variable. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-oidc-allowed-domains` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-oidc-allowed-domains=acme.com
+# or
+ATLANTIS_WEB_OIDC_ALLOWED_DOMAINS=acme.com
+```
+
+Only users whose verified email, or Google Workspace `hd` claim, is in one of these domains can sign in with OIDC. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-oidc-client-id` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-oidc-client-id=atlantis
+# or
+ATLANTIS_WEB_OIDC_CLIENT_ID=atlantis
+```
+
+Client ID of the OIDC application registered for Atlantis. Register `https://ATLANTIS_URL/ui/auth/callback/oidc` as its redirect URI. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-oidc-client-secret` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-oidc-client-secret=SECRET
+# or
+ATLANTIS_WEB_OIDC_CLIENT_SECRET=SECRET
+```
+
+Client secret of the OIDC application. Set it with the environment variable. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-oidc-groups-claims` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-oidc-groups-claims=groups,roles
+# or
+ATLANTIS_WEB_OIDC_GROUPS_CLAIMS=groups,roles
+```
+
+ID token claims read as groups. Defaults to `groups`. For Microsoft Entra ID, assign app roles and include `roles`; when a user is in more than 200 groups, Entra ID leaves them out of the token and sign-in fails with an explanation. When the claims are missing, Atlantis also checks the userinfo endpoint. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-oidc-issuer-url` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-oidc-issuer-url=https://login.microsoftonline.com/TENANT_ID/v2.0
+# or
+ATLANTIS_WEB_OIDC_ISSUER_URL=https://login.microsoftonline.com/TENANT_ID/v2.0
+```
+
+OpenID Connect issuer URL. Atlantis reads the provider's discovery document on the first sign-in. Examples: `https://accounts.google.com`, `https://YOUR_ORG.okta.com`, `https://keycloak.example.com/realms/REALM`, `https://gitlab.com`. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-oidc-name` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-oidc-name="Microsoft Entra ID"
+# or
+ATLANTIS_WEB_OIDC_NAME="Microsoft Entra ID"
+```
+
+Name shown on the OIDC sign-in button. Defaults to `Single sign-on`. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-oidc-scopes` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-oidc-scopes=email,profile
+# or
+ATLANTIS_WEB_OIDC_SCOPES=email,profile
+```
+
+Scopes requested in addition to `openid`. Defaults to `email,profile`. Some providers need an extra scope for groups, such as `groups` for Okta and Dex. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
 ### `--web-password`
 
 ```bash
@@ -1774,6 +1874,146 @@ ATLANTIS_WEB_PASSWORD="atlantis"
 ```
 
 Password used for Basic Authentication on the Atlantis web service. Defaults to `atlantis`.
+
+### `--web-proxy-alb-arn` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-proxy-alb-arn=arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/atlantis/abc
+# or
+ATLANTIS_WEB_PROXY_ALB_ARN=arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/atlantis/abc
+```
+
+ARN of the load balancer that must have signed the `x-amzn-oidc-data` header, for `--web-proxy-auth=alb`. Its region selects the AWS public key endpoint. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-proxy-auth` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-proxy-auth=alb
+# or
+ATLANTIS_WEB_PROXY_AUTH=alb
+```
+
+Take the web UI user from an authenticating proxy instead of showing a sign-in page: `alb` for an AWS Application Load Balancer with authentication (including IAM Identity Center through Amazon Cognito), `iap` for Google Cloud Identity-Aware Proxy, or `header` for proxies such as oauth2-proxy and Pomerium. Requires the `web-ui` experiment and at least one role rule. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-proxy-email-header` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-proxy-email-header=X-Forwarded-Email
+# or
+ATLANTIS_WEB_PROXY_EMAIL_HEADER=X-Forwarded-Email
+```
+
+Header that carries the user's email, for `--web-proxy-auth=header`. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-proxy-groups-header` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-proxy-groups-header=X-Forwarded-Groups
+# or
+ATLANTIS_WEB_PROXY_GROUPS_HEADER=X-Forwarded-Groups
+```
+
+Header that carries the user's groups, separated by commas, for `--web-proxy-auth=header`. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-proxy-iap-audience` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-proxy-iap-audience=/projects/123/global/backendServices/456
+# or
+ATLANTIS_WEB_PROXY_IAP_AUDIENCE=/projects/123/global/backendServices/456
+```
+
+Expected audience of the `x-goog-iap-jwt-assertion` header, for `--web-proxy-auth=iap`. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-proxy-trusted-cidrs` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-proxy-trusted-cidrs=10.0.0.0/8
+# or
+ATLANTIS_WEB_PROXY_TRUSTED_CIDRS=10.0.0.0/8
+```
+
+Networks allowed to send identity headers when `--web-proxy-auth=header`. Atlantis checks the address of the connection, not `X-Forwarded-For`, so put only your proxy's network here. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-proxy-user-header` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-proxy-user-header=X-Forwarded-User
+# or
+ATLANTIS_WEB_PROXY_USER_HEADER=X-Forwarded-User
+```
+
+Header that carries the user name, for `--web-proxy-auth=header`. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-role-admins` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-role-admins="group:platform-admins,email:lead@acme.com"
+# or
+ATLANTIS_WEB_ROLE_ADMINS="group:platform-admins,email:lead@acme.com"
+```
+
+Who gets the web UI admin role. Each rule is `group:NAME` (or a bare `NAME`), `email:ADDRESS`, `domain:example.com`, or `*` for everyone signed in. Emails and domains only match verified emails. Admins can do everything operators can, and lock or unlock applies for every repository. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-role-default` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-role-default=none
+# or
+ATLANTIS_WEB_ROLE_DEFAULT=none
+```
+
+Role for signed-in users who match no rule: `none`, `viewer`, `operator`, or `admin`. Defaults to `none`, which turns those users away. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-role-operators` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-role-operators="sre,acme/infra"
+# or
+ATLANTIS_WEB_ROLE_OPERATORS="sre,acme/infra"
+```
+
+Who gets the web UI operator role, using the same rules as [`--web-role-admins`](#web-role-admins). Operators can do everything viewers can, and discard plans and unlock projects. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-role-viewers` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-role-viewers="domain:acme.com"
+# or
+ATLANTIS_WEB_ROLE_VIEWERS="domain:acme.com"
+```
+
+Who gets the web UI viewer role, using the same rules as [`--web-role-admins`](#web-role-admins). Viewers can read pull requests, locks, and job logs. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-session-lifetime` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-session-lifetime=8h
+# or
+ATLANTIS_WEB_SESSION_LIFETIME=8h
+```
+
+How long a web UI sign-in lasts before the user signs in again. Defaults to `8h`. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-session-secrets` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-session-secrets="$(openssl rand -hex 32)"
+# or
+ATLANTIS_WEB_SESSION_SECRETS="$(openssl rand -hex 32)"
+```
+
+Secrets that encrypt web UI session cookies, separated by commas. Each must be at least 32 characters. The first encrypts and all decrypt, so to rotate, add the new secret in front and remove the old one after the session lifetime has passed. Every replica needs the same secrets. Set it with the environment variable so it doesn't appear in process listings. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-sso-providers` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-sso-providers=oidc,github
+# or
+ATLANTIS_WEB_SSO_PROVIDERS=oidc,github
+```
+
+Sign-in providers for the web UI at `/ui`, separated by commas: `oidc` and `github`. Requires the `web-ui` experiment, [`--web-session-secrets`](#web-session-secrets), and at least one role rule. Can't be combined with [`--web-proxy-auth`](#web-proxy-auth). See [web UI sign-in](experiments.md#web-ui-sign-in).
 
 ### `--web-username`
 

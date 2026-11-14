@@ -6,6 +6,8 @@ package webui
 import (
 	"fmt"
 	"time"
+
+	"github.com/runatlantis/atlantis/server/webauth"
 )
 
 // meta is the data every page shares.
@@ -15,9 +17,11 @@ type meta struct {
 	Base     string
 	Now      time.Time
 	Instance Instance
-	Caps     Capabilities
-	Actor    string
-	Flash    string
+	Caps      Capabilities
+	Principal *webauth.Principal
+	// SignOut is true when users sign in on Atlantis's own pages.
+	SignOut bool
+	Flash   string
 	Crumbs   []crumb
 	Counts   navCounts
 }
@@ -35,6 +39,30 @@ type navCounts struct {
 
 func (m meta) url(path string) templ.SafeURL {
 	return templ.SafeURL(m.Base + "/ui" + path)
+}
+
+// CanOperate reports whether the user may discard plans and unlock projects.
+func (m meta) CanOperate() bool { return m.Principal.Can(webauth.RoleOperator) }
+
+// CanAdmin reports whether the user may lock and unlock applies.
+func (m meta) CanAdmin() bool { return m.Principal.Can(webauth.RoleAdmin) }
+
+func signedInWith(p *webauth.Principal) string {
+	switch {
+	case p == nil:
+		return ""
+	case p.Provider == "none":
+		return "Web sign-in is off"
+	case p.Provider == "basic":
+		return "Basic auth · " + p.Role.String()
+	case p.Provider == "oidc":
+		return "Single sign-on · " + p.Role.String()
+	case p.Provider == "github":
+		return "GitHub · " + p.Role.String()
+	case p.Provider == "proxy":
+		return "Proxy sign-in · " + p.Role.String()
+	}
+	return p.Provider + " · " + p.Role.String()
 }
 
 func (m meta) asset(name string) string {
@@ -86,16 +114,20 @@ templ layout(m meta) {
 						@navLink(m, "replica", "/replica", "This replica", "server", 0)
 					</nav>
 					<div class="me">
-						<span class="avatar" aria-hidden="true">{ initials(m.Actor) }</span>
-						<span>
-							if m.Actor != "" {
-								{ m.Actor }
-								<small>Signed in with basic auth</small>
+						<span class="avatar" aria-hidden="true">{ initials(m.Principal.DisplayName()) }</span>
+						<span class="who">
+							if m.Principal.DisplayName() != "" {
+								{ m.Principal.DisplayName() }
 							} else {
 								Anonymous
-								<small>Web sign-in is off</small>
 							}
+							<small>{ signedInWith(m.Principal) }</small>
 						</span>
+						if m.SignOut {
+							<form method="post" action={ m.url("/logout") }>
+								<button class="btn sm" type="submit">Sign out</button>
+							</form>
+						}
 					</div>
 				</aside>
 				<div class="main">
@@ -284,21 +316,25 @@ templ applyBanner(m meta, al ApplyLock) {
 				<p><b>Applies are locked for every repository.</b></p>
 				<p class="muted">Locked { ago(m.Now, al.Since) }. Plans still run.</p>
 			</div>
-			<form method="post" action={ m.url("/applies/unlock") }>
-				<button class="btn" type="submit">Unlock applies</button>
-			</form>
+			if m.CanAdmin() {
+				<form method="post" action={ m.url("/applies/unlock") }>
+					<button class="btn" type="submit">Unlock applies</button>
+				</form>
+			}
 		</div>
 	} else {
 		<div class="banner">
 			@pill(toneOK, "Applies open")
 			<p class="grow muted">Anyone allowed to apply can run <span class="mono">atlantis apply</span>.</p>
-			<details class="confirm">
-				<summary class="btn danger">Lock applies…</summary>
-				<form method="post" action={ m.url("/applies/lock") } class="inline-confirm">
-					<span>Every <span class="mono">atlantis apply</span> fails until someone unlocks applies.</span>
-					<button class="btn danger solid" type="submit">Lock applies</button>
-				</form>
-			</details>
+			if m.CanAdmin() {
+				<details class="confirm">
+					<summary class="btn danger">Lock applies…</summary>
+					<form method="post" action={ m.url("/applies/lock") } class="inline-confirm">
+						<span>Every <span class="mono">atlantis apply</span> fails until someone unlocks applies.</span>
+						<button class="btn danger solid" type="submit">Lock applies</button>
+					</form>
+				</details>
+			}
 		</div>
 	}
 }
@@ -473,8 +509,10 @@ templ pullPage(m meta, p PullRequest) {
 									@ledger(proj.Changes)
 								</td>
 								<td>
-									if proj.LockID != "" {
+									if proj.LockID != "" && m.CanOperate() {
 										@unlockControl(m, proj.LockID, string(templ.SafeURL(pullHref(m.Base, p.Repo, p.Num))))
+									} else if proj.LockID != "" {
+										<span class="muted">Locked</span>
 									} else {
 										<span class="muted">Not locked</span>
 									}
@@ -527,7 +565,7 @@ templ locksPage(m meta, d locksData) {
 			<header>
 				<h2>{ itoa(len(d.Locks)) } project locks</h2>
 				<span class="muted">{ itoa(countStale(m.Now, d.Locks)) } look abandoned</span>
-				if len(d.Locks) > 0 {
+				if len(d.Locks) > 0 && m.CanOperate() {
 					<span class="right">
 						<details class="confirm">
 							<summary class="btn sm danger">Unlock selected…</summary>
@@ -545,7 +583,11 @@ templ locksPage(m meta, d locksData) {
 					<tbody>
 						for _, l := range d.Locks {
 							<tr>
-								<td class="pick"><input type="checkbox" class="cb" name="id" value={ l.ID } id={ "sel-" + l.ID } aria-label={ "Select " + l.Dir }/></td>
+								<td class="pick">
+									if m.CanOperate() {
+										<input type="checkbox" class="cb" name="id" value={ l.ID } id={ "sel-" + l.ID } aria-label={ "Select " + l.Dir }/>
+									}
+								</td>
 								<td>
 									<div class="title-cell">
 										<label class="mono" for={ "sel-" + l.ID }>{ lockLabel(l) }</label>
@@ -722,4 +764,61 @@ templ errorPage(m meta, title, message string) {
 		<div class="head"><div><h1>{ title }</h1><p>{ message }</p></div></div>
 		<p><a class="btn" href={ m.url("") }>Go to the overview</a></p>
 	}
+}
+
+type signInData struct {
+	Base      string
+	Providers []webauth.ProviderInfo
+	Return    string
+	Error     string
+	Notice    string
+}
+
+func (d signInData) startURL(id string) templ.SafeURL {
+	u := d.Base + "/ui/login/" + id
+	if d.Return != "" {
+		u += "?return=" + urlQueryEscape(d.Return)
+	}
+	return templ.SafeURL(u)
+}
+
+// signInPage stands alone so visitors who are not signed in see nothing
+// about the server.
+templ signInPage(d signInData) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>Sign in · Atlantis</title>
+			<link rel="icon" type="image/png" href={ d.Base + "/ui/static/favicon.png?v=" + assetVersion }/>
+			<link rel="stylesheet" href={ d.Base + "/ui/static/app.css?v=" + assetVersion }/>
+			<script src={ d.Base + "/ui/static/app.js?v=" + assetVersion } type="module"></script>
+		</head>
+		<body class="signin-body">
+			<main class="signin">
+				<div class="signcard">
+					<div class="brand">
+						<img class="brandmark" src={ d.Base + "/ui/static/atlantis-icon.png?v=" + assetVersion } width="28" height="28" alt=""/>
+						Atlantis
+					</div>
+					<h1>Sign in to Atlantis</h1>
+					<p class="muted">Use your work account. What you can do depends on your groups.</p>
+					if d.Notice != "" {
+						<div class="notice" role="status">{ d.Notice }</div>
+					}
+					if d.Error != "" {
+						<div class="notice bad" role="alert">{ d.Error }</div>
+					}
+					for _, p := range d.Providers {
+						<a class="opt" href={ d.startURL(p.ID) }>
+							<span class="mark" aria-hidden="true">{ providerMark(p.ID) }</span>
+							<span>Continue with { p.Name }</span>
+						</a>
+					}
+					<p class="foot muted">Signing in once works on every Atlantis replica.</p>
+				</div>
+			</main>
+		</body>
+	</html>
 }
