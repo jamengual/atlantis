@@ -4,10 +4,17 @@
 package server_test
 
 import (
+	"bufio"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/runatlantis/atlantis/server/events/command"
+	"github.com/runatlantis/atlantis/server/events/models"
+	"github.com/urfave/negroni/v3"
 
 	"github.com/gorilla/mux"
 	"github.com/runatlantis/atlantis/server"
@@ -112,4 +119,106 @@ func TestSetupRoutes_ExperimentGates(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNewServer_WiresWebUIExperiment(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("enabled=%v", enabled), func(t *testing.T) {
+			var names []string
+			if enabled {
+				names = []string{"web-ui"}
+			}
+			s, err := server.NewServer(server.UserConfig{
+				DataDir: t.TempDir(), AtlantisURL: testAtlantisUrl,
+				LockingDBType: testLockingDBType, GithubHostname: testGitHubHostName, GithubUser: testGitHubUser,
+				Experiments: names,
+			}, server.Config{AtlantisVersion: testAtlantisVersion})
+			Ok(t, err)
+			Equals(t, enabled, s.WebUI != nil)
+			s.SetupRoutes()
+			for _, path := range []string{"/ui", "/ui/pulls", "/ui/locks", "/ui/static/app.css"} {
+				var match mux.RouteMatch
+				Equals(t, enabled, s.Router.Match(httptest.NewRequest("GET", path, nil), &match))
+			}
+			if enabled {
+				response := httptest.NewRecorder()
+				s.Router.ServeHTTP(response, httptest.NewRequest("GET", "/ui", nil))
+				Equals(t, http.StatusOK, response.Code)
+				Assert(t, strings.Contains(response.Body.String(), "Overview"), "overview did not render")
+			}
+			// The existing UI keeps serving the root either way.
+			var match mux.RouteMatch
+			Assert(t, s.Router.Match(httptest.NewRequest("GET", "/", nil), &match), "index route missing")
+		})
+	}
+}
+
+// The job log stream must flush through the production middleware stack, not
+// only through a bare router.
+func TestWebUI_JobStreamFlushesThroughMiddleware(t *testing.T) {
+	s, err := server.NewServer(server.UserConfig{
+		DataDir: t.TempDir(), AtlantisURL: testAtlantisUrl,
+		LockingDBType: testLockingDBType, GithubHostname: testGitHubHostName, GithubUser: testGitHubUser,
+		Experiments: []string{"web-ui"},
+	}, server.Config{AtlantisVersion: testAtlantisVersion})
+	Ok(t, err)
+	s.SetupRoutes()
+	go s.ProjectCmdOutputHandler.Handle()
+
+	repo := models.Repo{FullName: "acme/infra", Name: "infra", VCSHost: models.VCSHost{Hostname: "github.com"}}
+	pctx := command.ProjectContext{JobID: "job-mw", Pull: models.PullRequest{Num: 1, BaseRepo: repo}, BaseRepo: repo,
+		RepoRelDir: "network", Workspace: "default", CommandName: command.Plan}
+	s.ProjectCmdOutputHandler.Send(pctx, "first line", false)
+
+	n := negroni.New(server.NewRequestLogger(s))
+	n.UseHandler(s.Router)
+	srv := httptest.NewServer(n)
+	defer srv.Close()
+
+	// Wait until the job is visible, then stream it.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		resp, err := http.Get(srv.URL + "/ui/jobs/job-mw")
+		Ok(t, err)
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("job never became visible")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	resp, err := http.Get(srv.URL + "/ui/jobs/job-mw/events")
+	Ok(t, err)
+	defer resp.Body.Close()
+	Equals(t, "text/event-stream", resp.Header.Get("Content-Type"))
+
+	sc := bufio.NewScanner(resp.Body)
+	readUntil := func(want string) {
+		t.Helper()
+		done := make(chan bool, 1)
+		go func() {
+			for sc.Scan() {
+				if sc.Text() == want {
+					done <- true
+					return
+				}
+			}
+			done <- false
+		}()
+		select {
+		case ok := <-done:
+			Assert(t, ok, "stream ended before %q", want)
+		case <-time.After(3 * time.Second):
+			t.Fatalf("%q was not flushed to the client", want)
+		}
+	}
+	// The first line arrives while the job is still running, which only
+	// happens if the middleware passes flushes through.
+	readUntil("data: first line")
+	s.ProjectCmdOutputHandler.Send(pctx, "second line", false)
+	readUntil("data: second line")
+	s.ProjectCmdOutputHandler.Send(pctx, "", true)
+	readUntil("event: done")
 }

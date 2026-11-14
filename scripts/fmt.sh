@@ -8,7 +8,7 @@ gobin="$(go env GOPATH)/bin"
 declare -r gobin
 
 declare -a files
-readarray -d '' files < <(find . -type f -name '*.go' ! -name 'mock_*' ! -path './vendor/*' ! -path '**/mocks/*' -print0)
+readarray -d '' files < <(find . -type f -name '*.go' ! -name 'mock_*' ! -name '*_templ.go' ! -path './vendor/*' ! -path '**/mocks/*' -print0)
 declare -r files
 
 output="$("${gobin}"/goimports -l "${files[@]}")"

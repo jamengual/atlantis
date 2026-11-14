@@ -44,6 +44,7 @@ import (
 	"github.com/runatlantis/atlantis/server/jobs"
 	"github.com/runatlantis/atlantis/server/metrics"
 	"github.com/runatlantis/atlantis/server/scheduled"
+	"github.com/runatlantis/atlantis/server/webui"
 
 	"github.com/gorilla/mux"
 	"github.com/runatlantis/atlantis/server/controllers"
@@ -128,7 +129,10 @@ type Server struct {
 	DisableGlobalApplyLock         bool
 	EnableProfilingAPI             bool
 	Experiments                    []string
-	database                       db.Database
+	// WebUI serves the experimental web UI at /ui when the web-ui
+	// experiment is enabled.
+	WebUI    *webui.Handler
+	database db.Database
 }
 
 // Config holds config for server that isn't passed in by the user.
@@ -1153,6 +1157,29 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 		GithubOrg:           userConfig.GithubOrg,
 	}
 
+	var webUIHandler *webui.Handler
+	if slices.Contains(userConfig.Experiments, webUIExperiment) {
+		webUIHandler = &webui.Handler{
+			Store: &webui.LegacyStore{
+				Locks:          lockingClient,
+				DB:             database,
+				ApplyLocks:     applyLockingClient,
+				Jobs:           projectCmdOutputHandler,
+				Drainer:        drainer,
+				Version:        config.AtlantisVersion,
+				LockingBackend: userConfig.LockingDBType,
+				StartedAt:      time.Now(),
+				Experiments:    slices.Clone(userConfig.Experiments),
+			},
+			Actions: &webui.LegacyActions{
+				Discarder:   locksController,
+				ApplyLocker: applyLockingClient,
+			},
+			BasePath: strings.TrimRight(parsedURL.Path, "/"),
+			Logger:   logger,
+		}
+	}
+
 	server := &Server{
 		AtlantisVersion:                config.AtlantisVersion,
 		AtlantisURL:                    parsedURL,
@@ -1188,6 +1215,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 		ScheduledExecutorService:       scheduledExecutorService,
 		EnableProfilingAPI:             userConfig.EnableProfilingAPI,
 		Experiments:                    slices.Clone(userConfig.Experiments),
+		WebUI:                          webUIHandler,
 		database:                       database,
 	}
 
@@ -1223,6 +1251,9 @@ func (s *Server) SetupRoutes() {
 		s.Router.HandleFunc("/api/drift/remediate/{id}", s.APIController.GetRemediationResult).Methods("GET")
 		s.Router.HandleFunc("/api/drift/remediate", s.APIController.ListRemediationResults).Methods("GET")
 		s.Router.HandleFunc("/api/drift/remediate", s.APIController.Remediate).Methods("POST")
+	}
+	if slices.Contains(s.Experiments, webUIExperiment) && s.WebUI != nil {
+		s.WebUI.Register(s.Router)
 	}
 	s.Router.HandleFunc("/github-app/exchange-code", s.GithubAppController.ExchangeCode).Methods("GET")
 	s.Router.HandleFunc("/github-app/setup", s.GithubAppController.New).Methods("GET")

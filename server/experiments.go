@@ -15,9 +15,10 @@ const ExperimentsDocumentationURL = "https://www.runatlantis.io/versions/main/do
 const (
 	apiExperiment   = "api"
 	driftExperiment = "drift-detection"
+	webUIExperiment = "web-ui"
 )
 
-var knownExperiments = []string{apiExperiment, driftExperiment}
+var knownExperiments = []string{apiExperiment, driftExperiment, webUIExperiment}
 
 // ValidateExperiments checks permissions and prerequisites before startup.
 func (c UserConfig) ValidateExperiments() error {
