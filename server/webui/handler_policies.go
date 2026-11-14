@@ -13,14 +13,17 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
+	"github.com/runatlantis/atlantis/server/core/config/valid"
 	"github.com/runatlantis/atlantis/server/webauth"
 )
 
 // policyApprover is who a request approves policies as on the VCS.
 type policyApprover struct {
 	Login string
-	// Teams are the GitHub team slugs, in the repository's organization,
-	// that the person's session says they belong to.
+	// Teams are the slugs of the GitHub teams, in the repository's
+	// organization, that the person is a direct member of. Like
+	// "atlantis approve_policies", membership in a child team doesn't count
+	// for its parent team.
 	Teams []string
 }
 
@@ -50,34 +53,23 @@ func (h *Handler) approverFor(r *http.Request, repo Repository) (policyApprover,
 	}
 	org, _, _ := strings.Cut(repo.FullName, "/")
 	a := policyApprover{Login: p.GitHubLogin}
-	for _, g := range p.Groups {
-		v, ok := strings.CutPrefix(strings.ToLower(g), webauth.GitHubGroupPrefix)
-		if !ok {
-			continue
-		}
-		if o, team, ok := strings.Cut(v, "/"); ok && strings.EqualFold(o, org) {
+	for _, t := range p.GitHubTeams {
+		if o, team, ok := strings.Cut(t, "/"); ok && strings.EqualFold(o, org) {
 			a.Teams = append(a.Teams, team)
 		}
 	}
 	return a, ""
 }
 
-// includes reports whether the approver is one of the owners.
+// includes reports whether the approver is one of the owners. It uses the
+// check "atlantis approve_policies" uses, so the UI offers approving exactly
+// when the command accepts it.
 func (o PolicyOwners) includes(a policyApprover) bool {
 	if a.Login == "" {
 		return false
 	}
-	for _, u := range o.Users {
-		if strings.EqualFold(u, a.Login) {
-			return true
-		}
-	}
-	for _, t := range o.Teams {
-		if slices.ContainsFunc(a.Teams, func(x string) bool { return strings.EqualFold(x, t) }) {
-			return true
-		}
-	}
-	return false
+	owners := valid.PolicyOwners{Users: o.Users, Teams: o.Teams}
+	return owners.IsOwner(a.Login, a.Teams)
 }
 
 // ownersText lists owners in plain words.

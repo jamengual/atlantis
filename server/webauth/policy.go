@@ -179,8 +179,8 @@ type PolicyConfig struct {
 	Access *valid.Access
 	Repos  []valid.Repo
 	// PolicyOwnerTeams are the GitHub team slugs named as policy owners,
-	// so sessions keep the "github:org/team" groups that approving
-	// policies from the web UI checks.
+	// so sessions keep the direct team memberships that approving policies
+	// from the web UI checks.
 	PolicyOwnerTeams []string
 }
 
@@ -354,22 +354,25 @@ func (p *Policy) RelevantGroups(groups []string) []string {
 	}
 	var out []string
 	for _, g := range groups {
-		if slices.ContainsFunc(all, func(r rule) bool { return r.kind == "group" && strings.EqualFold(r.value, g) }) || p.ownsPolicies(g) {
+		if slices.ContainsFunc(all, func(r rule) bool { return r.kind == "group" && strings.EqualFold(r.value, g) }) {
 			out = append(out, g)
 		}
 	}
 	return out
 }
 
-// ownsPolicies reports whether a group is a GitHub team named as a policy
-// owner, in any organization.
-func (p *Policy) ownsPolicies(group string) bool {
-	v, ok := strings.CutPrefix(strings.ToLower(group), GitHubGroupPrefix)
-	if !ok {
-		return false
+// PolicyOwnerTeams returns the "org/team" slugs among teams whose team is
+// named as a policy owner, in any organization, so sessions only carry the
+// teams approving policies can use.
+func (p *Policy) PolicyOwnerTeams(teams []string) []string {
+	var out []string
+	for _, t := range teams {
+		_, team, ok := strings.Cut(t, "/")
+		if ok && slices.ContainsFunc(p.ownerTeams, func(o string) bool { return strings.EqualFold(o, team) }) {
+			out = append(out, t)
+		}
 	}
-	_, team, ok := strings.Cut(v, "/")
-	return ok && slices.ContainsFunc(p.ownerTeams, func(t string) bool { return strings.EqualFold(t, team) })
+	return out
 }
 
 // GitHubTeamRules returns the org/team names that GitHub rules mention for

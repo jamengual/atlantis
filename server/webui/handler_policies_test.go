@@ -16,7 +16,13 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	pego "github.com/petergtz/pegomock/v4"
 	"github.com/runatlantis/atlantis/server/core/config/valid"
+	"github.com/runatlantis/atlantis/server/events"
+	"github.com/runatlantis/atlantis/server/events/command"
+	eventmocks "github.com/runatlantis/atlantis/server/events/mocks"
+	"github.com/runatlantis/atlantis/server/events/models"
+	vcsmocks "github.com/runatlantis/atlantis/server/events/vcs/mocks"
 	"github.com/runatlantis/atlantis/server/logging"
 	"github.com/runatlantis/atlantis/server/webauth"
 	"github.com/runatlantis/atlantis/server/webauth/webauthtest"
@@ -331,4 +337,120 @@ func TestPolicies_AccessPageShowsTheRule(t *testing.T) {
 	_, body := b.get(t, "/ui/access")
 	assertContains(t, body, "Approve failing policy checks, for policy owners", "Approving policies needs", "Your role allows approving",
 		"Approving policies also needs you to be a policy owner")
+}
+
+// ownerParityCases sign in with GitHub teams, where a team written
+// "child>parent" is a child team of parent. Policy set security is owned by
+// carol, dave, and team sec; root owns every set.
+var ownerParityCases = []struct {
+	name  string
+	login string
+	teams []string
+	owner bool
+}{
+	{"direct user owner", "dave", []string{"sre"}, true},
+	{"top-level user owner", "root", []string{"sre"}, true},
+	{"direct member of the owner team", "erin", []string{"sre", "sec"}, true},
+	{"owner team is a child team of another", "gina", []string{"sre", "sec>security-org"}, true},
+	{"member of a child team of the owner team", "olga", []string{"sre", "sec-oncall>sec"}, false},
+	{"not an owner", "pat", []string{"sre"}, false},
+}
+
+// signInGitHubTeams is signInGitHub for teams written "child>parent".
+func signInGitHubTeams(t *testing.T, b browserClient, gh *webauthtest.GitHub, login string, teams []string) (direct []string) {
+	t.Helper()
+	var ts []map[string]any
+	for _, team := range teams {
+		slug, parent, nested := strings.Cut(team, ">")
+		entry := map[string]any{"slug": slug, "organization": map[string]any{"login": "acme"}}
+		if nested {
+			entry["parent"] = map[string]any{"slug": parent}
+		}
+		ts = append(ts, entry)
+		direct = append(direct, slug)
+	}
+	gh.SetUser(map[string]any{"id": len(login), "login": login}, nil, []map[string]any{{"login": "acme"}}, ts)
+	status, _ := b.get(t, "/ui/login/github")
+	Equals(t, http.StatusOK, status)
+	return direct
+}
+
+type lockURLs struct{}
+
+func (lockURLs) GenerateLockURL(string) string { return "" }
+
+// commandAccepts runs the real "atlantis approve_policies" project command
+// for login against the same policy sets, with GitHub reporting the user's
+// direct teams as GetTeamNamesForUser does, and reports whether it accepted
+// the approval.
+func commandAccepts(t *testing.T, login string, directTeams []string) bool {
+	t.Helper()
+	pego.RegisterMockTestingT(t)
+	vcsClient := vcsmocks.NewMockClient()
+	locker := eventmocks.NewMockProjectLocker()
+	workingDir := eventmocks.NewMockWorkingDir()
+	runner := events.DefaultProjectCommandRunner{
+		Locker:           locker,
+		VcsClient:        vcsClient,
+		WorkingDir:       workingDir,
+		WorkingDirLocker: events.NewDefaultWorkingDirLocker(),
+		LockURLGenerator: lockURLs{},
+	}
+	pego.When(workingDir.GetWorkingDir(pego.Any[models.Repo](), pego.Any[models.PullRequest](), pego.Any[string]())).ThenReturn(t.TempDir(), nil)
+	pego.When(locker.TryLock(pego.Any[logging.SimpleLogging](), pego.Any[models.PullRequest](), pego.Any[models.User](), pego.Any[string](), pego.Any[models.Project](), pego.Any[bool]())).
+		ThenReturn(&events.TryLockResponse{LockAcquired: true, LockKey: "lock-key"}, nil)
+	repo := models.Repo{FullName: "acme/infra", Owner: "acme", Name: "infra", VCSHost: models.VCSHost{Hostname: "github.com", Type: models.Github}}
+	user := models.User{Username: login}
+	pego.When(vcsClient.GetTeamNamesForUser(pego.Any[logging.SimpleLogging](), pego.Eq(repo), pego.Eq(user))).ThenReturn(directTeams, nil)
+	res := runner.ApprovePolicies(command.ProjectContext{
+		User: user, Log: logging.NewNoopLogger(t), Workspace: "default", RepoRelDir: "network",
+		Pull: models.PullRequest{BaseRepo: repo, Num: 1482, Author: "mrivera", State: models.OpenPullState},
+		PolicySets: valid.PolicySets{
+			Owners: valid.PolicyOwners{Users: []string{"root"}},
+			PolicySets: []valid.PolicySet{{
+				Name: "security", ApproveCount: 2, PreventSelfApprove: true,
+				Owners: valid.PolicyOwners{Users: []string{"carol", "dave"}, Teams: []string{"sec"}},
+			}},
+		},
+		ProjectPolicyStatus: []models.PolicySetStatus{{PolicySetName: "security"}},
+	})
+	if res.Error != nil {
+		Assert(t, strings.Contains(res.Error.Error(), "is not a policy owner"), "unexpected command error: %s", res.Error)
+		return false
+	}
+	return true
+}
+
+// The UI offers approving exactly when "atlantis approve_policies" accepts
+// it: owner teams match by direct membership, so a child team's members
+// aren't owners through the parent team, even though they count as its
+// members for the access policy.
+func TestPolicies_OwnerDecisionMatchesTheCommand(t *testing.T) {
+	for _, tc := range ownerParityCases {
+		t.Run(tc.name, func(t *testing.T) {
+			actions := &fakeActions{}
+			srv, gh, _ := newApprovalServer(t, policyStore(), actions)
+			b := newBrowser(t, srv.URL)
+			direct := signInGitHubTeams(t, b, gh, tc.login, tc.teams)
+
+			_, page := b.get(t, "/ui/repos/acme/infra/pulls/1482/policies?dir=network&workspace=default&host=github.com")
+			offered := strings.Contains(page, `action="/ui/repos/acme/infra/pulls/1482/policies/approve"`)
+			Equals(t, tc.owner, offered)
+			if !tc.owner {
+				assertContains(t, page, "Only policy owners can approve security: carol, dave, root, team sec.")
+			}
+			resp := b.post(t, "/ui/repos/acme/infra/pulls/1482/policies/approve",
+				approveForm(url.Values{"scope": {"project"}, "dir": {"network"}, "workspace": {"default"}, "policy_set": {"security"}}))
+			resp.Body.Close()
+			if tc.owner {
+				Equals(t, http.StatusSeeOther, resp.StatusCode)
+				Equals(t, 1, len(actions.approvals))
+			} else {
+				Equals(t, http.StatusForbidden, resp.StatusCode)
+				Equals(t, 0, len(actions.approvals))
+			}
+
+			Equals(t, tc.owner, commandAccepts(t, tc.login, direct))
+		})
+	}
 }

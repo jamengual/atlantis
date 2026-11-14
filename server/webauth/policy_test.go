@@ -215,8 +215,11 @@ func TestPolicy_ApprovePolicies(t *testing.T) {
 	Equals(t, webauth.RoleAdmin, s.Repos[0].ApprovePolicies)
 	Equals(t, webauth.RoleViewer, s.Repos[1].ApprovePolicies)
 
-	// Sessions keep GitHub teams that own policy sets, in any org, so the UI
-	// can match them; other unmentioned groups are dropped.
-	Equals(t, []string{"github:acme/sre", "github:acme/sec", "github:other/SEC"},
+	// Groups keep only what rules mention; owner teams are kept separately,
+	// from direct memberships, in any org, so the UI can match them the way
+	// approve_policies does.
+	Equals(t, []string{"github:acme/sre"},
 		p.RelevantGroups([]string{"github:acme/sre", "github:acme/sec", "github:other/SEC", "github:acme/web", "github:sec", "sec"}))
+	Equals(t, []string{"acme/sec", "other/SEC"},
+		p.PolicyOwnerTeams([]string{"acme/sre", "acme/sec", "other/SEC", "acme/web", "sec", "acme/sec-oncall"}))
 }

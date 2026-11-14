@@ -162,7 +162,7 @@ A policy owner can approve from the UI: **Approve policies** on the pull request
 Approving from the UI needs all of:
 
 - The `approve_policies` permission, operator by default. Set `access.permissions.approve_policies`, or `permissions.approve_policies` on a `repos` entry, to change that (see [the access policy](#access-policy-in-the-server-side-repo-config)).
-- [GitHub sign-in](#github) on the same host as the repository. Policy owners are GitHub users and teams, so Atlantis approves as the GitHub login you signed in with. Your teams come from your session; Atlantis keeps the `github:ORG/TEAM` groups for teams named in `policies.owners` or a policy set's `owners`.
+- [GitHub sign-in](#github) on the same host as the repository. Policy owners are GitHub users and teams, so Atlantis approves as the GitHub login you signed in with. Your teams come from your session; Atlantis keeps the teams named in `policies.owners` or a policy set's `owners` that you're a direct member of. As with the comment command, being in a child team doesn't make you an owner through its parent team, although it counts for the access policy.
 - Being a policy owner: a user or team in `policies.owners`, which approves every set, or in the set's own `owners`. Authors can't approve a set with `prevent_self_approve`, and an owner's approval counts once.
 
 The UI explains which of these is missing. People who signed in with an OpenID Connect provider or a proxy have no GitHub login, so they can't approve from the UI. Without web sign-in, including with basic auth, nobody can approve from the UI, because Atlantis can't tell which policy owner someone is; comment `atlantis approve_policies` on the pull request instead. Approving from the UI works only for GitHub repositories.

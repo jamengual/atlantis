@@ -69,6 +69,11 @@ type Identity struct {
 	Groups        []string
 	// Login is the GitHub username, set by the GitHub provider.
 	Login string
+	// GitHubTeams are the "org/team" slugs of the GitHub teams the user is
+	// a direct member of, set by the GitHub provider. Unlike Groups, parent
+	// teams aren't added, because policy owners are matched the way
+	// "atlantis approve_policies" matches them: by direct membership only.
+	GitHubTeams []string
 }
 
 // Principal is the signed-in user of one request.
@@ -83,6 +88,10 @@ type Principal struct {
 	Groups []string `json:"g,omitempty"`
 	// GitHubLogin is set when the user signed in with GitHub.
 	GitHubLogin string `json:"gh,omitempty"`
+	// GitHubTeams are the "org/team" slugs of the GitHub teams the user is
+	// a direct member of that own policy sets. Approving policies from the
+	// web UI matches owners against these, as the comment command does.
+	GitHubTeams []string `json:"ght,omitempty"`
 	// Base is a role held regardless of policy rules, such as the
 	// basic-auth user's when web sign-in is off. It is never stored.
 	Base Role `json:"-"`

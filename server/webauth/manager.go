@@ -186,12 +186,14 @@ func (m *Manager) principal(id Identity, provider string) *Principal {
 		id.Groups = slices.DeleteFunc(slices.Clone(id.Groups), func(g string) bool {
 			return strings.HasPrefix(strings.ToLower(g), GitHubGroupPrefix)
 		})
+		id.GitHubTeams = nil
 	}
 	p := &Principal{Subject: id.Subject, Name: id.Name, Provider: provider, GitHubLogin: id.Login}
 	if id.EmailVerified {
 		p.Email = id.Email
 	}
 	p.Groups = m.cfg.Policy.RelevantGroups(id.Groups)
+	p.GitHubTeams = m.cfg.Policy.PolicyOwnerTeams(id.GitHubTeams)
 	p.Role = m.cfg.Policy.GlobalRole(p.AsSubject())
 	return p
 }
