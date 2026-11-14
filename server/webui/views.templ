@@ -246,7 +246,7 @@ templ pullTable(m meta, pulls []PullRequest) {
 					<tr>
 						<td>
 							<div class="title-cell">
-								<a class="rowlink" href={ templ.SafeURL(pullHref(m.Base, p.Repo.FullName, p.Num)) }>{ p.Repo.FullName } #{ itoa(p.Num) }</a>
+								<a class="rowlink" href={ templ.SafeURL(pullHref(m.Base, p.Repo, p.Num)) }>{ p.Repo.FullName } #{ itoa(p.Num) }</a>
 								<small>
 									{ orUnknown(p.Author) }
 									if p.HeadBranch != "" {
@@ -451,7 +451,7 @@ templ pullPage(m meta, p PullRequest) {
 				}
 			</div>
 		</div>
-		<section class="panel" id="projects" hx-get={ string(templ.SafeURL(pullHref(m.Base, p.Repo.FullName, p.Num))) } hx-trigger="every 5s" hx-select="#projects" hx-target="this" hx-swap="outerHTML">
+		<section class="panel" id="projects" hx-get={ string(templ.SafeURL(pullHref(m.Base, p.Repo, p.Num))) } hx-trigger="every 5s" hx-select="#projects" hx-target="this" hx-swap="outerHTML">
 			<header><h2>Projects</h2><span class="muted">{ itoa(len(p.Projects)) }</span></header>
 			<div class="scroll">
 				<table class="tbl">
@@ -478,7 +478,7 @@ templ pullPage(m meta, p PullRequest) {
 								</td>
 								<td>
 									if proj.LockID != "" {
-										@unlockControl(m, proj.LockID, string(templ.SafeURL(pullHref(m.Base, p.Repo.FullName, p.Num))))
+										@unlockControl(m, proj.LockID, string(templ.SafeURL(pullHref(m.Base, p.Repo, p.Num))))
 									} else {
 										<span class="muted">Not locked</span>
 									}
@@ -559,7 +559,7 @@ templ locksPage(m meta, d locksData) {
 								<td>{ orUnknown(l.User) }</td>
 								<td>
 									if l.PullTracked {
-										<a href={ templ.SafeURL(pullHref(m.Base, l.Repo.FullName, l.PullNum)) }>#{ itoa(l.PullNum) }</a>
+										<a href={ templ.SafeURL(pullHref(m.Base, l.Repo, l.PullNum)) }>#{ itoa(l.PullNum) }</a>
 									} else {
 										if l.PullURL != "" {
 											<a href={ templ.SafeURL(l.PullURL) } rel="noopener noreferrer" target="_blank">#{ itoa(l.PullNum) }</a>
@@ -618,6 +618,8 @@ templ jobsPage(m meta, d jobsData) {
 								<td>
 									if j.Done {
 										@pill(toneNeutral, "Finished")
+									} else if j.Stalled {
+										@pill(toneWarn, "No output for over an hour")
 									} else {
 										@pill(toneRun, "Running")
 									}
@@ -650,7 +652,7 @@ templ jobPage(m meta, j Job) {
 					@pill(toneRun, "Running")
 				}
 				<span>{ j.Step }</span>
-				<a href={ templ.SafeURL(pullHref(m.Base, j.Repo.FullName, j.PullNum)) }>{ j.Repo.FullName } #{ itoa(j.PullNum) }</a>
+				<a href={ templ.SafeURL(pullHref(m.Base, j.Repo, j.PullNum)) }>{ j.Repo.FullName } #{ itoa(j.PullNum) }</a>
 				<span>workspace { j.Workspace }</span>
 			</div>
 		</div>

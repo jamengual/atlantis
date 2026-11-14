@@ -29,7 +29,7 @@ type fakeStore struct {
 	jobs     []webui.Job
 	apply    webui.ApplyLock
 	logs     map[string][]string
-	liveLogs map[string]chan string
+	liveLogs map[string]chan webui.LogLine
 	err      error
 }
 
@@ -38,9 +38,9 @@ func (f *fakeStore) Instance(context.Context) webui.Instance {
 	return webui.Instance{Version: "9.9.9", LockingBackend: "redis", DatabaseOK: true, InProgressOps: 3}
 }
 func (f *fakeStore) ListPulls(context.Context) ([]webui.PullRequest, error) { return f.pulls, f.err }
-func (f *fakeStore) GetPull(_ context.Context, repo string, num int) (*webui.PullRequest, error) {
+func (f *fakeStore) GetPull(_ context.Context, repo webui.Repository, num int) (*webui.PullRequest, error) {
 	for i := range f.pulls {
-		if f.pulls[i].Repo.FullName == repo && f.pulls[i].Num == num {
+		if f.pulls[i].Repo.FullName == repo.FullName && f.pulls[i].Num == num && (repo.VCSHost == "" || repo.VCSHost == f.pulls[i].Repo.VCSHost) {
 			return &f.pulls[i], nil
 		}
 	}
@@ -66,16 +66,18 @@ func (f *fakeStore) GetJob(_ context.Context, id string) (webui.Job, bool) {
 	}
 	return webui.Job{}, false
 }
-func (f *fakeStore) SubscribeJobLog(id string) (<-chan string, func()) {
+func (f *fakeStore) JobLog(ctx context.Context, id string, from int) <-chan webui.LogLine {
 	if live, ok := f.liveLogs[id]; ok {
-		return live, func() {}
+		return live
 	}
-	ch := make(chan string, len(f.logs[id]))
-	for _, l := range f.logs[id] {
-		ch <- l
+	ch := make(chan webui.LogLine, len(f.logs[id]))
+	for i, l := range f.logs[id] {
+		if i >= from {
+			ch <- webui.LogLine{N: i + 1, Text: l}
+		}
 	}
 	close(ch)
-	return ch, func() {}
+	return ch
 }
 
 type fakeActions struct {
@@ -183,7 +185,7 @@ func TestPages_Render(t *testing.T) {
 	}{
 		{"/ui", []string{"<title>Overview · Atlantis</title>", "Needs attention", "acme/infra #1482: plan failed in edge (prod)",
 			"acme/data #77 is waiting for a policy approval", "pull request #62, which Atlantis no longer tracks", "Running now", "9.9.9"}},
-		{"/ui/pulls", []string{"2 of 2 pull requests", "acme/infra #1482", "/ui/repos/acme/infra/pulls/1482"}},
+		{"/ui/pulls", []string{"2 of 2 pull requests", "acme/infra #1482", "/ui/repos/acme/infra/pulls/1482?host=github.com"}},
 		{"/ui/pulls?state=policy", []string{"1 of 2 pull requests", "acme/data #77"}},
 		{"/ui/repos/acme/infra/pulls/1482", []string{"acme/infra #1482", "alb-sg → main", "a91f3c2", "+2", "~4", "-1", "Discard plan and unlock", "/ui/jobs/job-1"}},
 		{"/ui/locks", []string{"2 project locks", "1 look abandoned", "Not tracked", "Stale", "value=\"acme/data/old/default\""}},
@@ -225,7 +227,7 @@ func TestPages_EscapeUserContent(t *testing.T) {
 func TestPages_BasePath(t *testing.T) {
 	srv := newServer(t, sampleStore(), &fakeActions{}, "/atlantis")
 	_, body := get(t, srv, "/ui/pulls")
-	assertContains(t, body, `href="/atlantis/ui/repos/acme/infra/pulls/1482"`, `/atlantis/ui/static/app.css?v=`)
+	assertContains(t, body, `href="/atlantis/ui/repos/acme/infra/pulls/1482?host=github.com"`, `/atlantis/ui/static/app.css?v=`)
 }
 
 func TestPages_NotFound(t *testing.T) {
@@ -335,12 +337,25 @@ func TestActions_SameOriginAllowed(t *testing.T) {
 
 func TestActions_ReturnPathCannotLeaveTheUI(t *testing.T) {
 	srv := newServer(t, sampleStore(), &fakeActions{}, "")
-	for _, ret := range []string{"https://evil.example/ui", "//evil.example/ui", "/\\evil.example", "/other", "/ui/../admin", "/uix", "/ui?x=//evil"} {
+	for _, ret := range []string{"https://evil.example/ui", "//evil.example/ui", "/\\evil.example", "/other", "/ui/../admin", "/uix", "/ui/locks#frag"} {
 		resp := post(t, srv, "/ui/applies/lock", url.Values{"return": {ret}}, nil)
 		Equals(t, "/ui/locks?done=applies-locked", resp.Header.Get("Location"))
 	}
 	resp := post(t, srv, "/ui/applies/lock", url.Values{"return": {"/ui/repos/acme/infra/pulls/1482"}}, nil)
 	Equals(t, "/ui/repos/acme/infra/pulls/1482?done=applies-locked", resp.Header.Get("Location"))
+	// Only the host parameter survives from the return path's query.
+	resp = post(t, srv, "/ui/applies/lock", url.Values{"return": {"/ui/repos/acme/infra/pulls/1482?host=github.com&x=//evil"}}, nil)
+	Equals(t, "/ui/repos/acme/infra/pulls/1482?host=github.com&done=applies-locked", resp.Header.Get("Location"))
+}
+
+func TestPages_PullLinksCarryHost(t *testing.T) {
+	srv := newServer(t, sampleStore(), &fakeActions{}, "")
+	_, body := get(t, srv, "/ui/pulls")
+	assertContains(t, body, `/ui/repos/acme/infra/pulls/1482?host=github.com`)
+	resp, _ := get(t, srv, "/ui/repos/acme/infra/pulls/1482?host=gitlab.com")
+	Equals(t, http.StatusNotFound, resp.StatusCode)
+	resp, _ = get(t, srv, "/ui/repos/acme/infra/pulls/1482?host=github.com")
+	Equals(t, http.StatusOK, resp.StatusCode)
 }
 
 func TestFlash_UnknownKeyIgnored(t *testing.T) {
@@ -384,8 +399,8 @@ func TestJobEvents_StreamsAndResumes(t *testing.T) {
 
 func TestJobEvents_KeepAliveWhileIdle(t *testing.T) {
 	store := sampleStore()
-	live := make(chan string)
-	store.liveLogs = map[string]chan string{"job-1": live}
+	live := make(chan webui.LogLine)
+	store.liveLogs = map[string]chan webui.LogLine{"job-1": live}
 	srv := newServer(t, store, &fakeActions{}, "")
 
 	resp, err := http.Get(srv.URL + "/ui/jobs/job-1/events")

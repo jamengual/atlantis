@@ -6,6 +6,7 @@ package webui_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -151,10 +152,10 @@ func TestLegacyStore_ListPullsBuildsProjects(t *testing.T) {
 	Equals(t, webui.Changes{Known: true, Add: 2, Change: 1}, pr.Changes())
 	Assert(t, !pr.LastActivity.IsZero(), "last activity should come from the lock or job")
 
-	got, err := f.store.GetPull(ctx, "acme/infra", 1)
+	got, err := f.store.GetPull(ctx, webui.Repository{FullName: "acme/infra"}, 1)
 	Ok(t, err)
 	Equals(t, 1, got.Num)
-	missing, err := f.store.GetPull(ctx, "acme/infra", 99)
+	missing, err := f.store.GetPull(ctx, webui.Repository{FullName: "acme/infra"}, 99)
 	Ok(t, err)
 	Assert(t, missing == nil, "unknown pull should be nil")
 }
@@ -165,7 +166,7 @@ func TestLegacyStore_RunningJobMarksProjectRunning(t *testing.T) {
 	f.plan(t, p, "network", true)
 	f.job(t, "job-run", p, "network", []string{"Initializing..."}, false)
 
-	pr, err := f.store.GetPull(context.Background(), "acme/infra", 2)
+	pr, err := f.store.GetPull(context.Background(), webui.Repository{FullName: "acme/infra"}, 2)
 	Ok(t, err)
 	Equals(t, webui.StateRunning, pr.Projects[0].State)
 
@@ -229,41 +230,179 @@ func TestLegacyStore_InstanceReportsDatabaseError(t *testing.T) {
 	Equals(t, "connection refused", inst.DatabaseError)
 }
 
-func TestLegacyStore_SubscribeJobLogReplaysThenStreams(t *testing.T) {
+func collect(t *testing.T, lines <-chan webui.LogLine, n int) []webui.LogLine {
+	t.Helper()
+	var got []webui.LogLine
+	timeout := time.After(2 * time.Second)
+	for len(got) < n {
+		select {
+		case l, ok := <-lines:
+			if !ok {
+				t.Fatalf("log closed after %d of %d lines", len(got), n)
+			}
+			got = append(got, l)
+		case <-timeout:
+			t.Fatalf("got %d of %d lines before timeout", len(got), n)
+		}
+	}
+	return got
+}
+
+func expectClosed(t *testing.T, lines <-chan webui.LogLine) {
+	t.Helper()
+	select {
+	case l, ok := <-lines:
+		if ok {
+			t.Fatalf("expected the log to close, got line %d %q", l.N, l.Text)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("log did not close")
+	}
+}
+
+func projCtx(id string, p models.PullRequest) command.ProjectContext {
+	return command.ProjectContext{JobID: id, Pull: p, BaseRepo: p.BaseRepo, RepoRelDir: "network", Workspace: "default", CommandName: command.Plan}
+}
+
+func TestLegacyStore_JobLogReplaysStreamsAndCloses(t *testing.T) {
 	f := newFixture(t)
+	f.store.PollInterval = 5 * time.Millisecond
 	p := pull(5)
 	f.job(t, "job-log", p, "network", []string{"one", "two"}, false)
 
-	lines, cancel := f.store.SubscribeJobLog("job-log")
-	defer cancel()
-	Equals(t, "one", <-lines)
-	Equals(t, "two", <-lines)
+	lines := f.store.JobLog(context.Background(), "job-log", 0)
+	Equals(t, []webui.LogLine{{N: 1, Text: "one"}, {N: 2, Text: "two"}}, collect(t, lines, 2))
 
-	ctx := command.ProjectContext{JobID: "job-log", Pull: p, BaseRepo: p.BaseRepo, RepoRelDir: "network", Workspace: "default", CommandName: command.Plan}
-	f.handler.Send(ctx, "three", false)
-	Equals(t, "three", <-lines)
-	f.handler.Send(ctx, "", true)
-	_, open := <-lines
-	Equals(t, false, open)
+	f.handler.Send(projCtx("job-log", p), "three", false)
+	Equals(t, []webui.LogLine{{N: 3, Text: "three"}}, collect(t, lines, 1))
+	f.handler.Send(projCtx("job-log", p), "", true)
+	expectClosed(t, lines)
 }
 
-func TestLegacyStore_SubscribeJobLogCancelDoesNotBlockHandler(t *testing.T) {
+func TestLegacyStore_JobLogResumesAtExactLine(t *testing.T) {
 	f := newFixture(t)
-	p := pull(6)
-	many := make([]string, 2000)
-	for i := range many {
-		many[i] = "line"
+	f.store.PollInterval = 5 * time.Millisecond
+	f.job(t, "job-resume", pull(6), "network", []string{"a", "b", "c", "d"}, true)
+
+	lines := f.store.JobLog(context.Background(), "job-resume", 2)
+	Equals(t, []webui.LogLine{{N: 3, Text: "c"}, {N: 4, Text: "d"}}, collect(t, lines, 2))
+	expectClosed(t, lines)
+}
+
+func TestLegacyStore_JobLogSlowReaderMissesNothing(t *testing.T) {
+	f := newFixture(t)
+	f.store.PollInterval = 5 * time.Millisecond
+	p := pull(7)
+	f.job(t, "job-slow", p, "network", []string{"start"}, false)
+
+	lines := f.store.JobLog(context.Background(), "job-slow", 0)
+	// Produce far more output than any channel buffer while nobody reads.
+	const extra = 3000
+	for i := range extra {
+		f.handler.Send(projCtx("job-slow", p), fmt.Sprintf("line %d", i), false)
 	}
-	f.job(t, "job-big", p, "network", many, false)
+	f.handler.Send(projCtx("job-slow", p), "", true)
 
-	// Leave before reading the replay. The handler must keep accepting output.
-	_, cancel := f.store.SubscribeJobLog("job-big")
+	got := collect(t, lines, extra+1)
+	for i, l := range got {
+		Equals(t, i+1, l.N)
+	}
+	Equals(t, "line 2999", got[len(got)-1].Text)
+	expectClosed(t, lines)
+}
+
+func TestLegacyStore_JobLogFinishedJobCloses(t *testing.T) {
+	f := newFixture(t)
+	f.store.PollInterval = 5 * time.Millisecond
+	f.job(t, "job-done", pull(8), "network", []string{"x"}, true)
+	lines := f.store.JobLog(context.Background(), "job-done", 0)
+	collect(t, lines, 1)
+	expectClosed(t, lines)
+}
+
+func TestLegacyStore_JobLogStopsWhenReaderLeaves(t *testing.T) {
+	f := newFixture(t)
+	f.store.PollInterval = 5 * time.Millisecond
+	f.job(t, "job-leave", pull(9), "network", []string{"x"}, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	lines := f.store.JobLog(ctx, "job-leave", 0)
+	collect(t, lines, 1)
 	cancel()
+	expectClosed(t, lines)
+}
 
-	ctx := command.ProjectContext{JobID: "job-big", Pull: p, BaseRepo: p.BaseRepo, RepoRelDir: "network", Workspace: "default", CommandName: command.Plan}
-	f.handler.Send(ctx, "after", false)
-	waitFor(t, func() bool {
-		j, ok := f.store.GetJob(context.Background(), "job-big")
-		return ok && j.Lines == 2001
-	})
+func TestLegacyStore_JobLogClosesWhenOutputCleanedUp(t *testing.T) {
+	f := newFixture(t)
+	f.store.PollInterval = 5 * time.Millisecond
+	p := pull(10)
+	f.job(t, "job-clean", p, "network", []string{"x"}, false)
+	lines := f.store.JobLog(context.Background(), "job-clean", 0)
+	collect(t, lines, 1)
+	f.handler.CleanUp(jobs.PullInfo{PullNum: p.Num, Repo: p.BaseRepo.Name, RepoFullName: p.BaseRepo.FullName, Path: "network", Workspace: "default"})
+	expectClosed(t, lines)
+}
+
+func TestLegacyStore_JobLogUnknownJobCloses(t *testing.T) {
+	f := newFixture(t)
+	expectClosed(t, f.store.JobLog(context.Background(), "nope", 0))
+}
+
+func TestLegacyStore_SameRepoNameOnTwoHostsStaysSeparate(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	gh := pull(11)
+	gl := pull(11)
+	gl.BaseRepo.VCSHost = models.VCSHost{Hostname: "gitlab.com", Type: models.Gitlab}
+	f.plan(t, gh, "network", true)
+	f.plan(t, gl, "network", true)
+	_, err := f.locker.TryLock(models.NewProject("acme/infra", "network", ""), "default", gl, models.User{Username: "gl-user"})
+	Ok(t, err)
+
+	ghPull, err := f.store.GetPull(ctx, webui.Repository{VCSHost: "github.com", FullName: "acme/infra"}, 11)
+	Ok(t, err)
+	glPull, err := f.store.GetPull(ctx, webui.Repository{VCSHost: "gitlab.com", FullName: "acme/infra"}, 11)
+	Ok(t, err)
+	Equals(t, "github.com", ghPull.Repo.VCSHost)
+	Equals(t, "gitlab.com", glPull.Repo.VCSHost)
+	Equals(t, "", ghPull.Projects[0].LockID)
+	Assert(t, glPull.Projects[0].LockID != "", "the GitLab pull request holds the lock")
+
+	locks, err := f.store.ListLocks(ctx)
+	Ok(t, err)
+	Equals(t, "gitlab.com", locks[0].Repo.VCSHost)
+	Equals(t, true, locks[0].PullTracked)
+}
+
+func TestLegacyStore_LockWithoutBaseRepoStillMatches(t *testing.T) {
+	f := newFixture(t)
+	p := pull(12)
+	f.plan(t, p, "network", true)
+	// Locks written by older versions have no Pull.BaseRepo.
+	old := models.PullRequest{Num: 12}
+	_, err := f.locker.TryLock(models.NewProject("acme/infra", "network", ""), "default", old, models.User{Username: "u"})
+	Ok(t, err)
+
+	pr, err := f.store.GetPull(context.Background(), webui.Repository{FullName: "acme/infra"}, 12)
+	Ok(t, err)
+	Assert(t, pr.Projects[0].LockID != "", "old lock should match by project repo")
+	locks, err := f.store.ListLocks(context.Background())
+	Ok(t, err)
+	Equals(t, "acme/infra", locks[0].Repo.FullName)
+	Equals(t, true, locks[0].PullTracked)
+}
+
+func TestLegacyStore_StalledJobIsNotRunning(t *testing.T) {
+	f := newFixture(t)
+	p := pull(13)
+	f.plan(t, p, "network", true)
+	f.job(t, "job-stuck", p, "network", []string{"Initializing..."}, false)
+	f.store.Now = func() time.Time { return time.Now().Add(2 * time.Hour) }
+
+	pr, err := f.store.GetPull(context.Background(), webui.Repository{FullName: "acme/infra"}, 13)
+	Ok(t, err)
+	Equals(t, webui.StatePlanned, pr.Projects[0].State)
+	j, ok := f.store.GetJob(context.Background(), "job-stuck")
+	Equals(t, true, ok)
+	Equals(t, true, j.Stalled)
+	Equals(t, 0, len(f.store.ListJobs(context.Background(), webui.JobFilter{RunningOnly: true})))
 }

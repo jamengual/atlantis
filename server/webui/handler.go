@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -62,6 +63,8 @@ type Handler struct {
 	Now func() time.Time
 	// HeartbeatInterval is how often idle log streams send a keep-alive.
 	HeartbeatInterval time.Duration
+	// WriteTimeout bounds each write to a log stream. Defaults to 30s.
+	WriteTimeout time.Duration
 }
 
 // Register adds the UI routes to r. Mutating routes reject cross-origin
@@ -127,7 +130,19 @@ func actor(r *http.Request) string {
 	return ""
 }
 
+// loaded carries lists a page already read, so meta doesn't read them again.
+type loaded struct {
+	pulls []PullRequest
+	locks []Lock
+	jobs  []Job
+	have  struct{ pulls, locks, jobs bool }
+}
+
 func (h *Handler) meta(r *http.Request, title, nav string, crumbs ...crumb) meta {
+	return h.metaWith(r, loaded{}, title, nav, crumbs...)
+}
+
+func (h *Handler) metaWith(r *http.Request, l loaded, title, nav string, crumbs ...crumb) meta {
 	ctx := r.Context()
 	m := meta{
 		Title:    title,
@@ -140,13 +155,21 @@ func (h *Handler) meta(r *http.Request, title, nav string, crumbs ...crumb) meta
 		Flash:    flashMessage(r.URL.Query()),
 	}
 	m.Crumbs = append([]crumb{{Label: "Atlantis", Href: string(m.url(""))}}, crumbs...)
-	if pulls, err := h.Store.ListPulls(ctx); err == nil {
+	if l.have.pulls {
+		m.Counts.Pulls = len(l.pulls)
+	} else if pulls, err := h.Store.ListPulls(ctx); err == nil {
 		m.Counts.Pulls = len(pulls)
 	}
-	if locks, err := h.Store.ListLocks(ctx); err == nil {
+	if l.have.locks {
+		m.Counts.Locks = len(l.locks)
+	} else if locks, err := h.Store.ListLocks(ctx); err == nil {
 		m.Counts.Locks = len(locks)
 	}
-	m.Counts.Jobs = len(h.Store.ListJobs(ctx, JobFilter{RunningOnly: true}))
+	if l.have.jobs {
+		m.Counts.Jobs = len(l.jobs)
+	} else {
+		m.Counts.Jobs = len(h.Store.ListJobs(ctx, JobFilter{RunningOnly: true}))
+	}
 	return m
 }
 
@@ -182,12 +205,15 @@ func (h *Handler) overview(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, "the apply lock", err)
 		return
 	}
-	m := h.meta(r, "Overview", "overview")
+	running := h.Store.ListJobs(ctx, JobFilter{RunningOnly: true})
+	l := loaded{pulls: pulls, locks: locks, jobs: running}
+	l.have.pulls, l.have.locks, l.have.jobs = true, true, true
+	m := h.metaWith(r, l, "Overview", "overview")
 	m.Crumbs = []crumb{{Label: "Overview"}}
 	h.render(w, r, http.StatusOK, overviewPage(m, overviewData{
 		Pulls:     pulls,
 		Locks:     locks,
-		Running:   h.Store.ListJobs(ctx, JobFilter{RunningOnly: true}),
+		Running:   running,
 		ApplyLock: al,
 		Attention: needsAttention(m.Now, pulls, locks, h.BasePath),
 	}))
@@ -213,7 +239,9 @@ func (h *Handler) pulls(w http.ResponseWriter, r *http.Request) {
 			shown = append(shown, p)
 		}
 	}
-	m := h.meta(r, "Pull requests", "pulls", crumb{Label: "Pull requests"})
+	l := loaded{pulls: pulls}
+	l.have.pulls = true
+	m := h.metaWith(r, l, "Pull requests", "pulls", crumb{Label: "Pull requests"})
 	h.render(w, r, http.StatusOK, pullsPage(m, pullsData{Pulls: shown, Filter: filter, Total: len(pulls)}))
 }
 
@@ -221,7 +249,7 @@ func (h *Handler) pull(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	num, _ := strconv.Atoi(vars["num"])
 	repo := vars["repo"]
-	p, err := h.Store.GetPull(r.Context(), repo, num)
+	p, err := h.Store.GetPull(r.Context(), Repository{VCSHost: r.URL.Query().Get("host"), FullName: repo}, num)
 	if err != nil {
 		h.fail(w, r, "the pull request", err)
 		return
@@ -249,7 +277,9 @@ func (h *Handler) locks(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, "the apply lock", err)
 		return
 	}
-	m := h.meta(r, "Locks", "locks", crumb{Label: "Locks"})
+	l := loaded{locks: locks}
+	l.have.locks = true
+	m := h.metaWith(r, l, "Locks", "locks", crumb{Label: "Locks"})
 	h.render(w, r, http.StatusOK, locksPage(m, locksData{Locks: locks, ApplyLock: al}))
 }
 
@@ -318,7 +348,11 @@ func (h *Handler) redirectBack(w http.ResponseWriter, r *http.Request, fallback 
 		target = ret
 	}
 	if len(q) > 0 {
-		target += "?" + q.Encode()
+		sep := "?"
+		if strings.Contains(target, "?") {
+			sep = "&"
+		}
+		target += sep + q.Encode()
 	}
 	// #nosec G710 -- target is the fallback or a cleaned path under BasePath/ui; uiPath rejects other hosts and paths.
 	http.Redirect(w, r, target, http.StatusSeeOther)
@@ -326,9 +360,10 @@ func (h *Handler) redirectBack(w http.ResponseWriter, r *http.Request, fallback 
 
 // uiPath accepts a return path only when it is a plain absolute path that
 // stays under BasePath/ui after cleaning. Anything with a scheme, host,
-// query, backslash, or protocol-relative prefix is rejected.
+// fragment, backslash, or protocol-relative prefix is rejected. Of the query,
+// only the host parameter is kept.
 func (h *Handler) uiPath(raw string) (string, bool) {
-	if raw == "" || !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") || strings.ContainsAny(raw, "\\?#") {
+	if raw == "" || !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") || strings.ContainsAny(raw, "\\#") {
 		return "", false
 	}
 	u, err := url.Parse(raw)
@@ -339,6 +374,9 @@ func (h *Handler) uiPath(raw string) (string, bool) {
 	prefix := h.BasePath + "/ui"
 	if cleaned != prefix && !strings.HasPrefix(cleaned, prefix+"/") {
 		return "", false
+	}
+	if host := u.Query().Get("host"); host != "" {
+		cleaned += "?host=" + url.QueryEscape(host)
 	}
 	return cleaned, true
 }
@@ -396,7 +434,7 @@ func (h *Handler) unlockApplies(w http.ResponseWriter, r *http.Request) {
 
 // jobEvents streams a job's output as server-sent events. Each line is one
 // event whose id is its 1-based line number, so a reconnecting browser sends
-// Last-Event-ID and only receives the lines it missed. A "done" event marks
+// Last-Event-ID and receives only the lines after it. A "done" event marks
 // the end of the job.
 func (h *Handler) jobEvents(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
@@ -404,24 +442,21 @@ func (h *Handler) jobEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "This replica has no output for that job.", http.StatusNotFound)
 		return
 	}
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "Streaming is not supported by this server.", http.StatusInternalServerError)
-		return
-	}
-	skip, _ := strconv.Atoi(r.Header.Get("Last-Event-ID"))
+	from, _ := strconv.Atoi(r.Header.Get("Last-Event-ID"))
 
 	hd := w.Header()
 	hd.Set("Content-Type", "text/event-stream")
 	hd.Set("Cache-Control", "no-cache")
 	hd.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
-	_, _ = fmt.Fprint(w, "retry: 3000\n\n")
-	flusher.Flush()
 
-	lines, cancel := h.Store.SubscribeJobLog(id)
+	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	streamLines(r.Context(), w, flusher, lines, skip, h.heartbeat())
+	s := &sseWriter{w: w, rc: http.NewResponseController(w), timeout: h.writeTimeout()}
+	if s.write("retry: 3000\n\n") != nil || s.flush() != nil {
+		return
+	}
+	streamLines(ctx, s, h.Store.JobLog(ctx, id, from), h.heartbeat())
 }
 
 func (h *Handler) heartbeat() time.Duration {
@@ -431,49 +466,74 @@ func (h *Handler) heartbeat() time.Duration {
 	return 15 * time.Second
 }
 
-func streamLines(ctx context.Context, w http.ResponseWriter, f http.Flusher, lines <-chan string, skip int, beat time.Duration) {
+func (h *Handler) writeTimeout() time.Duration {
+	if h.WriteTimeout > 0 {
+		return h.WriteTimeout
+	}
+	return 30 * time.Second
+}
+
+// sseWriter bounds every write with a deadline so a client that stops
+// reading cannot hold the stream open forever. Writers that do not support
+// deadlines are used without one.
+type sseWriter struct {
+	w       http.ResponseWriter
+	rc      *http.ResponseController
+	timeout time.Duration
+}
+
+func (s *sseWriter) write(text string) error {
+	_ = s.rc.SetWriteDeadline(time.Now().Add(s.timeout))
+	_, err := fmt.Fprint(s.w, text)
+	return err
+}
+
+func (s *sseWriter) flush() error {
+	err := s.rc.Flush()
+	if errors.Is(err, http.ErrNotSupported) {
+		return nil
+	}
+	return err
+}
+
+func streamLines(ctx context.Context, s *sseWriter, lines <-chan LogLine, beat time.Duration) {
 	ticker := time.NewTicker(beat)
 	defer ticker.Stop()
-	n := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if _, err := fmt.Fprint(w, ": keep-alive\n\n"); err != nil {
+			if s.write(": keep-alive\n\n") != nil || s.flush() != nil {
 				return
 			}
-			f.Flush()
 		case line, ok := <-lines:
 			if !ok {
-				_, _ = fmt.Fprint(w, "event: done\ndata: \n\n")
-				f.Flush()
+				if ctx.Err() == nil {
+					_ = s.write("event: done\ndata: \n\n")
+					_ = s.flush()
+				}
 				return
 			}
-			n++
-			if n <= skip {
-				continue
-			}
-			if err := writeEvent(w, n, line); err != nil {
+			if s.write(formatEvent(line)) != nil {
 				return
 			}
-			// Flush when the channel is drained so replays go out in batches.
-			if len(lines) == 0 {
-				f.Flush()
+			// Flush once the backlog is drained so replays go out in batches.
+			if len(lines) == 0 && s.flush() != nil {
+				return
 			}
 		}
 	}
 }
 
-func writeEvent(w http.ResponseWriter, id int, line string) error {
+func formatEvent(line LogLine) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "id: %d\n", id)
-	for part := range strings.SplitSeq(strings.ReplaceAll(line, "\r\n", "\n"), "\n") {
+	fmt.Fprintf(&b, "id: %d\n", line.N)
+	for part := range strings.SplitSeq(strings.ReplaceAll(line.Text, "\r\n", "\n"), "\n") {
 		b.WriteString("data: ")
 		b.WriteString(strings.ReplaceAll(part, "\r", ""))
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	_, err := fmt.Fprint(w, b.String())
-	return err
+	return b.String()
 }

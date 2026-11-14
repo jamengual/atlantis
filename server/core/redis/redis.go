@@ -455,9 +455,15 @@ func (r *RedisDB) GetPullStatus(pull models.PullRequest) (*models.PullStatus, er
 // decoded. Like List, this scans the nodes the client reaches.
 func (r *RedisDB) ListPullStatuses() ([]models.PullStatus, error) {
 	var statuses []models.PullStatus
+	// SCAN may return a key more than once, so track what was read.
+	seen := map[string]struct{}{}
 	iter := r.client.Scan(ctx, 0, "*"+pullKeySeparator+"*"+pullKeySeparator+"*", 0).Iterator()
 	for iter.Next(ctx) {
 		key := iter.Val()
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
 		if strings.HasPrefix(key, "pr/") || strings.HasPrefix(key, "global/") {
 			continue
 		}

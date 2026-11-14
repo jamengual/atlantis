@@ -7,7 +7,6 @@ import (
 	"cmp"
 	"context"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -61,6 +60,13 @@ type LegacyStore struct {
 	LockingBackend string
 	StartedAt      time.Time
 	Experiments    []string
+	// PollInterval is how often JobLog checks for new output. Defaults to
+	// 250ms.
+	PollInterval time.Duration
+	// Now returns the current time. Tests replace it.
+	Now func() time.Time
+
+	changesCache sync.Map // job ID -> Changes
 }
 
 var _ Store = (*LegacyStore)(nil)
@@ -113,17 +119,49 @@ func (s *LegacyStore) ListPulls(ctx context.Context) ([]PullRequest, error) {
 	return pulls, nil
 }
 
-func (s *LegacyStore) GetPull(ctx context.Context, repoFullName string, num int) (*PullRequest, error) {
+func (s *LegacyStore) GetPull(ctx context.Context, repo Repository, num int) (*PullRequest, error) {
 	pulls, err := s.ListPulls(ctx)
 	if err != nil {
 		return nil, err
 	}
 	for i := range pulls {
-		if pulls[i].Repo.FullName == repoFullName && pulls[i].Num == num {
+		if pulls[i].Repo.FullName == repo.FullName && pulls[i].Num == num && sameHost(repo.VCSHost, pulls[i].Repo.VCSHost) {
 			return &pulls[i], nil
 		}
 	}
 	return nil, nil
+}
+
+// staleJobAfter is how long an unfinished job may go without output before
+// the UI stops treating it as running.
+const staleJobAfter = time.Hour
+
+func (s *LegacyStore) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
+}
+
+// sameHost reports whether two VCS hostnames can refer to the same host. An
+// empty hostname, as on locks written by older versions, matches any host.
+func sameHost(a, b string) bool {
+	return a == "" || b == "" || a == b
+}
+
+// lockRepo returns the repository a lock belongs to. Project.RepoFullName is
+// set on every lock; Pull.BaseRepo is empty on locks from older versions.
+func lockRepo(l models.ProjectLock) Repository {
+	name := l.Project.RepoFullName
+	if name == "" {
+		name = l.Pull.BaseRepo.FullName
+	}
+	return Repository{VCSHost: l.Pull.BaseRepo.VCSHost.Hostname, FullName: name}
+}
+
+func lockOwnedBy(l models.ProjectLock, repo Repository, num int) bool {
+	lr := lockRepo(l)
+	return lr.FullName == repo.FullName && l.Pull.Num == num && sameHost(lr.VCSHost, repo.VCSHost)
 }
 
 func (s *LegacyStore) buildPull(st models.PullStatus, locks map[string]models.ProjectLock, jobList []Job) PullRequest {
@@ -137,7 +175,7 @@ func (s *LegacyStore) buildPull(st models.PullStatus, locks map[string]models.Pr
 		HeadCommit: st.Pull.HeadCommit,
 	}
 	for _, l := range locks {
-		if l.Pull.BaseRepo.FullName == pr.Repo.FullName && l.Pull.Num == pr.Num && l.Time.After(pr.LastActivity) {
+		if lockOwnedBy(l, pr.Repo, pr.Num) && l.Time.After(pr.LastActivity) {
 			pr.LastActivity = l.Time
 		}
 	}
@@ -149,7 +187,7 @@ func (s *LegacyStore) buildPull(st models.PullStatus, locks map[string]models.Pr
 			State:     stateFor(ps.Status),
 		}
 		for id, l := range locks {
-			if l.Pull.BaseRepo.FullName == pr.Repo.FullName && l.Pull.Num == pr.Num &&
+			if lockOwnedBy(l, pr.Repo, pr.Num) &&
 				l.Project.Path == ps.RepoRelDir && l.Workspace == ps.Workspace && l.Project.ProjectName == ps.ProjectName {
 				p.LockID = id
 			}
@@ -167,7 +205,7 @@ func (s *LegacyStore) buildPull(st models.PullStatus, locks map[string]models.Pr
 			if p.LatestJobID == "" {
 				p.LatestJobID = j.ID // jobList is newest first
 			}
-			if !j.Done {
+			if !j.Done && !j.Stalled {
 				p.State = StateRunning
 			}
 			if latestPlan == nil && j.Done && j.Step == command.Plan.String() {
@@ -192,7 +230,17 @@ func (s *LegacyStore) buildPull(st models.PullStatus, locks map[string]models.Pr
 }
 
 // planChanges reads the change counts from a finished plan job's output.
+// Finished output never changes, so results are cached by job ID.
 func (s *LegacyStore) planChanges(jobID string) Changes {
+	if c, ok := s.changesCache.Load(jobID); ok {
+		return c.(Changes)
+	}
+	c := s.parsePlanChanges(jobID)
+	s.changesCache.Store(jobID, c)
+	return c
+}
+
+func (s *LegacyStore) parsePlanChanges(jobID string) Changes {
 	r, ok := s.Jobs.(outputBufferReader)
 	if !ok {
 		return Changes{}
@@ -242,15 +290,19 @@ func (s *LegacyStore) ListLocks(_ context.Context) ([]Lock, error) {
 	if err != nil {
 		return nil, err
 	}
-	tracked := map[string]bool{}
-	for _, st := range statuses {
-		tracked[pullKey(st.Pull.BaseRepo.FullName, st.Pull.Num)] = true
-	}
 	out := make([]Lock, 0, len(locks))
 	for id, l := range locks {
+		tracked := false
+		for _, st := range statuses {
+			repo := Repository{VCSHost: st.Pull.BaseRepo.VCSHost.Hostname, FullName: st.Pull.BaseRepo.FullName}
+			if lockOwnedBy(l, repo, st.Pull.Num) {
+				tracked = true
+				break
+			}
+		}
 		out = append(out, Lock{
 			ID:          id,
-			Repo:        Repository{VCSHost: l.Pull.BaseRepo.VCSHost.Hostname, FullName: l.Project.RepoFullName},
+			Repo:        lockRepo(l),
 			Dir:         l.Project.Path,
 			Workspace:   l.Workspace,
 			ProjectName: l.Project.ProjectName,
@@ -259,7 +311,7 @@ func (s *LegacyStore) ListLocks(_ context.Context) ([]Lock, error) {
 			PullAuthor:  l.Pull.Author,
 			User:        l.User.Username,
 			Since:       l.Time,
-			PullTracked: tracked[pullKey(l.Project.RepoFullName, l.Pull.Num)],
+			PullTracked: tracked,
 		})
 	}
 	slices.SortStableFunc(out, func(a, b Lock) int {
@@ -269,10 +321,6 @@ func (s *LegacyStore) ListLocks(_ context.Context) ([]Lock, error) {
 		return cmp.Compare(a.ID, b.ID)
 	})
 	return out, nil
-}
-
-func pullKey(repo string, num int) string {
-	return repo + "#" + strconv.Itoa(num)
 }
 
 func (s *LegacyStore) ApplyLock(_ context.Context) (ApplyLock, error) {
@@ -310,7 +358,8 @@ func (s *LegacyStore) ListJobs(_ context.Context, f JobFilter) []Job {
 				j.Done = buf.OperationComplete
 				j.Lines = len(buf.Buffer)
 			}
-			if f.RunningOnly && j.Done {
+			j.Stalled = !j.Done && s.now().Sub(j.LastOutput) > staleJobAfter
+			if f.RunningOnly && (j.Done || j.Stalled) {
 				continue
 			}
 			out = append(out, j)
@@ -334,56 +383,53 @@ func (s *LegacyStore) GetJob(ctx context.Context, id string) (Job, bool) {
 	return Job{}, false
 }
 
-// SubscribeJobLog registers with the output handler, which first replays the
-// buffered lines and then forwards new ones. Register blocks while it
-// replays, so it runs in its own goroutine. When the caller cancels before
-// the job ends, the channel keeps draining until registration finishes and is
-// then deregistered, so the handler never blocks on a reader that left.
-func (s *LegacyStore) SubscribeJobLog(id string) (<-chan string, func()) {
-	in := make(chan string, 512)
-	out := make(chan string, 512)
-	registered := make(chan struct{})
-	stop := make(chan struct{})
-	go func() {
-		s.Jobs.Register(id, in)
-		close(registered)
-	}()
+// JobLog reads the job's output buffer by line index. Polling the buffer,
+// rather than registering a receiver channel with the output handler, means a
+// slow or departed reader can never block the handler or miss lines, and a
+// resumed stream starts exactly at the requested line.
+func (s *LegacyStore) JobLog(ctx context.Context, id string, from int) <-chan LogLine {
+	out := make(chan LogLine, 256)
+	reader, ok := s.Jobs.(outputBufferReader)
 	go func() {
 		defer close(out)
+		if !ok {
+			return
+		}
+		next := max(from, 0)
+		ticker := time.NewTicker(s.pollInterval())
+		defer ticker.Stop()
 		for {
-			select {
-			case line, ok := <-in:
-				if !ok {
-					return
-				}
-				select {
-				case out <- line:
-				case <-stop:
-					s.drain(id, in, registered)
-					return
-				}
-			case <-stop:
-				s.drain(id, in, registered)
+			buf := reader.GetProjectOutputBuffer(id)
+			if buf.Buffer == nil && !buf.OperationComplete {
+				// The output was cleaned up, or the job finished without output.
 				return
+			}
+			for next < len(buf.Buffer) {
+				select {
+				case out <- LogLine{N: next + 1, Text: buf.Buffer[next]}:
+					next++
+				case <-ctx.Done():
+					return
+				}
+			}
+			if buf.OperationComplete {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
 			}
 		}
 	}()
-	var once sync.Once
-	return out, func() { once.Do(func() { close(stop) }) }
+	return out
 }
 
-func (s *LegacyStore) drain(id string, in chan string, registered <-chan struct{}) {
-	for {
-		select {
-		case <-registered:
-			s.Jobs.Deregister(id, in)
-			return
-		case _, ok := <-in:
-			if !ok {
-				return
-			}
-		}
+func (s *LegacyStore) pollInterval() time.Duration {
+	if s.PollInterval > 0 {
+		return s.PollInterval
 	}
+	return 250 * time.Millisecond
 }
 
 // LegacyActions performs UI actions with the existing lock controller and

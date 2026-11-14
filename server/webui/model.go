@@ -120,7 +120,9 @@ type ApplyLock struct {
 	Since   time.Time
 }
 
-// Job is one command run for a project, such as a plan or an apply.
+// Job is one command run for a project, such as a plan or an apply. Jobs from
+// the in-memory output handler carry no VCS host, so they are matched to pull
+// requests by repository name only.
 type Job struct {
 	ID          string
 	Repo        Repository
@@ -131,8 +133,11 @@ type Job struct {
 	Step        string
 	Description string
 	Done        bool
-	LastOutput  time.Time
-	Lines       int
+	// Stalled is true when an unfinished job has produced no output for a
+	// long time, which usually means its process died.
+	Stalled    bool
+	LastOutput time.Time
+	Lines      int
 }
 
 // JobFilter narrows ListJobs.
@@ -171,15 +176,23 @@ type Store interface {
 	Instance(ctx context.Context) Instance
 	ListPulls(ctx context.Context) ([]PullRequest, error)
 	// GetPull returns nil when Atlantis has no status for the pull request.
-	GetPull(ctx context.Context, repoFullName string, num int) (*PullRequest, error)
+	// An empty repo.VCSHost matches any host.
+	GetPull(ctx context.Context, repo Repository, num int) (*PullRequest, error)
 	ListLocks(ctx context.Context) ([]Lock, error)
 	ApplyLock(ctx context.Context) (ApplyLock, error)
 	ListJobs(ctx context.Context, f JobFilter) []Job
 	GetJob(ctx context.Context, id string) (Job, bool)
-	// SubscribeJobLog streams every output line of a job, oldest first, then
-	// new lines as they arrive. The channel closes when the job finishes.
-	// Call cancel when done reading.
-	SubscribeJobLog(id string) (lines <-chan string, cancel func())
+	// JobLog streams a job's output starting after the first `from` lines,
+	// then new lines as they arrive. The channel closes when the job has
+	// finished and every line was sent, when the job's output is removed, or
+	// when ctx is done.
+	JobLog(ctx context.Context, id string, from int) <-chan LogLine
+}
+
+// LogLine is one line of job output. N is its 1-based position in the log.
+type LogLine struct {
+	N    int
+	Text string
 }
 
 // Actions changes state on behalf of a user.

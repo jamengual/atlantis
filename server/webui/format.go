@@ -156,7 +156,7 @@ type attentionItem struct {
 func needsAttention(now time.Time, pulls []PullRequest, locks []Lock, base string) []attentionItem {
 	var bad, warn, info []attentionItem
 	for _, p := range pulls {
-		href := pullHref(base, p.Repo.FullName, p.Num)
+		href := pullHref(base, p.Repo, p.Num)
 		name := fmt.Sprintf("%s #%d", p.Repo.FullName, p.Num)
 		for _, proj := range p.Projects {
 			switch proj.State {
@@ -215,12 +215,18 @@ func lowerFirst(s string) string {
 	return string(b)
 }
 
-func pullHref(base, repo string, num int) string {
-	parts := strings.Split(repo, "/")
+// pullHref links to a pull request page. The host is included so repositories
+// with the same name on different VCS hosts stay distinct.
+func pullHref(base string, repo Repository, num int) string {
+	parts := strings.Split(repo.FullName, "/")
 	for i := range parts {
 		parts[i] = url.PathEscape(parts[i])
 	}
-	return fmt.Sprintf("%s/ui/repos/%s/pulls/%d", base, strings.Join(parts, "/"), num)
+	href := fmt.Sprintf("%s/ui/repos/%s/pulls/%d", base, strings.Join(parts, "/"), num)
+	if repo.VCSHost != "" {
+		href += "?host=" + url.QueryEscape(repo.VCSHost)
+	}
+	return href
 }
 
 func jobHref(base, id string) string {
