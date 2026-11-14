@@ -196,6 +196,34 @@ Drift results are kept in memory on the replica that ran the detection and are l
 
 Without drift detection enabled, the page explains how to turn it on and the overview has no drift summary.
 
+### Web UI JSON API
+
+The data the web UI shows is also available as read-only JSON under `/ui/api/v1`, for scripts and dashboards. `GET /ui/api/v1/openapi.json` returns its OpenAPI 3.1 description. The API is part of the `web-ui` experiment and may change before the UI graduates.
+
+| Path | Returns |
+| --- | --- |
+| `/instance` | The replica that answered, who you are, and your global permissions |
+| `/pulls` | Pull requests with their projects, states, and change counts |
+| `/repos/{repo}/pulls/{num}` | One pull request with its locks and maintenance windows |
+| `/repos/{repo}/pulls/{num}/plan?dir=&workspace=&project=` | A project's plan details, as on the [plan page](#web-ui-plan-details) |
+| `/repos/{repo}/pulls/{num}/policies?dir=&workspace=&project=` | A project's policy check, as on the **Policies** page |
+| `/locks` and `/apply-lock` | Project locks and the global apply lock |
+| `/jobs` and `/jobs/{id}` | Jobs this replica has a record of. Logs aren't part of the API. |
+| `/maintenance` | Active maintenance windows |
+| `/drift` | The latest drift detection results |
+
+`{repo}` is the full name, such as `acme/infra`; add `?host=github.com` to pick the VCS host when the same name exists on several. Lists have the shape `{"items": [...], "next": null}`. `next` is always `null` today; clients that follow it when it isn't will keep working once lists are paginated. Times are RFC 3339 in UTC, and unknown values are `null`.
+
+The API uses the same sign-in and rules as the pages:
+
+- With [web UI sign-in](#web-ui-sign-in), requests need the session cookie of a signed-in browser, or the identity headers of the authenticating proxy. A request without one gets HTTP 401 with a JSON error instead of a redirect to the sign-in page. Someone without the viewer role gets HTTP 403 with the reason.
+- Without web UI sign-in, the server's [basic auth](server-configuration.md#web-basic-auth) applies, as for the pages.
+- Every endpoint needs the `view` permission. Viewing isn't scoped by repository, so the API lists the same pull requests, locks, and jobs as the pages. Each item has a `permissions` object, such as `{"unlock": true}`, that matches the buttons the pages show the same person.
+
+There are no API tokens yet; use the API from a signed-in browser session or behind the authenticating proxy. The API doesn't change anything: unlocking, stopping jobs, maintenance windows, and policy approvals are only on the pages. Requests other than `GET` get HTTP 405.
+
+Responses are never cached (`Cache-Control: no-store`) and contain no session data. Plan details leave out values Terraform marks as sensitive, as the plan page does. Every response that comes from the store has a `capabilities` object that says which data lives only on the replica that answered, for example `"shared_plans": false` for plan details and `"cluster_jobs": false` for jobs. With several replicas behind a load balancer, two requests can get different answers for that data.
+
 ### Web UI sign-in
 
 Web UI sign-in replaces basic auth for the pages at `/ui` with your identity provider, and gives each person a role. It only applies to `/ui`; the existing UI and the API keep their current authentication. Sign-in requires the `web-ui` experiment.

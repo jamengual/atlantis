@@ -1,0 +1,2085 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Atlantis web UI API",
+    "version": "1",
+    "description": "Read-only JSON API for the data the experimental Atlantis web UI shows. It is part of the web-ui experiment and may change. Requests use the web UI's sign-in: the session cookie when web sign-in is on, the server's basic auth when it is off. Every endpoint needs the view permission, and the per-item permissions match what the web UI shows the same person. Responses are never cached. Data that lives on one replica says so through capabilities."
+  },
+  "servers": [
+    {
+      "url": "/ui/api/v1",
+      "description": "Relative to the Atlantis URL, including any base path."
+    }
+  ],
+  "security": [
+    {
+      "session": []
+    },
+    {
+      "basic": []
+    }
+  ],
+  "paths": {
+    "/openapi.json": {
+      "get": {
+        "operationId": "getOpenAPI",
+        "summary": "This document",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/instance": {
+      "get": {
+        "operationId": "getInstance",
+        "summary": "The answering replica, the viewer, and their global permissions",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceItem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/pulls": {
+      "get": {
+        "operationId": "listPulls",
+        "summary": "Pull requests Atlantis has run commands for",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/repos/{repo}/pulls/{num}": {
+      "get": {
+        "operationId": "getPull",
+        "summary": "One pull request with its projects, locks, and maintenance windows",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullDetailItem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Repo"
+          },
+          {
+            "$ref": "#/components/parameters/Num"
+          },
+          {
+            "$ref": "#/components/parameters/Host"
+          }
+        ]
+      }
+    },
+    "/repos/{repo}/pulls/{num}/plan": {
+      "get": {
+        "operationId": "getPlan",
+        "summary": "The resource changes in a project's latest plan",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanItem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "description": "Values Terraform marks as sensitive are never returned. The plan is read from the answering replica's working directory; see capabilities.shared_plans.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Repo"
+          },
+          {
+            "$ref": "#/components/parameters/Num"
+          },
+          {
+            "$ref": "#/components/parameters/Host"
+          },
+          {
+            "name": "dir",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project directory, as in the pull request's projects."
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project name, when the project has one."
+          }
+        ]
+      }
+    },
+    "/repos/{repo}/pulls/{num}/policies": {
+      "get": {
+        "operationId": "getPolicies",
+        "summary": "A project's latest policy check",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoliciesItem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Repo"
+          },
+          {
+            "$ref": "#/components/parameters/Num"
+          },
+          {
+            "$ref": "#/components/parameters/Host"
+          },
+          {
+            "name": "dir",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project directory, as in the pull request's projects."
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project name, when the project has one."
+          }
+        ]
+      }
+    },
+    "/locks": {
+      "get": {
+        "operationId": "listLocks",
+        "summary": "Project locks",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LockList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/apply-lock": {
+      "get": {
+        "operationId": "getApplyLock",
+        "summary": "The global apply lock",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplyLockItem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/jobs": {
+      "get": {
+        "operationId": "listJobs",
+        "summary": "Jobs the answering replica has a record of",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        },
+        "description": "The log stream is not part of the API; open the job page in the web UI to follow output."
+      }
+    },
+    "/jobs/{id}": {
+      "get": {
+        "operationId": "getJob",
+        "summary": "One job",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobItem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/maintenance": {
+      "get": {
+        "operationId": "listMaintenance",
+        "summary": "Active maintenance windows, oldest first",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaintenanceList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/drift": {
+      "get": {
+        "operationId": "listDrift",
+        "summary": "The latest drift detection result of every project and ref, drifted first",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriftList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "session": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "atlantis_session",
+        "description": "The web UI's sign-in session. Sign in at /ui/login in a browser."
+      },
+      "basic": {
+        "type": "http",
+        "scheme": "basic",
+        "description": "The server's basic auth, when web sign-in is off."
+      }
+    },
+    "parameters": {
+      "Repo": {
+        "name": "repo",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Repository full name, such as acme/infra. Its slashes may be sent as they are or as %2F."
+      },
+      "Num": {
+        "name": "num",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "description": "Pull request number."
+      },
+      "Host": {
+        "name": "host",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string"
+        },
+        "description": "VCS host, such as github.com. Omit to match any host."
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "Nobody is signed in.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "The viewer's role doesn't allow viewing.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "No such pull request, project, or job.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Unavailable": {
+        "description": "Atlantis couldn't read the data, usually because the lock database is unreachable.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "Machine-readable error code.",
+                "enum": [
+                  "unauthorized",
+                  "forbidden",
+                  "not_found",
+                  "method_not_allowed",
+                  "unavailable",
+                  "internal"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "description": "What happened and how to fix it, for people."
+              }
+            }
+          }
+        }
+      },
+      "Capabilities": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "run_history",
+          "cluster_jobs",
+          "audit_log",
+          "shared_plans",
+          "shared_policy_output",
+          "shared_maintenance",
+          "shared_drift"
+        ],
+        "properties": {
+          "run_history": {
+            "type": "boolean",
+            "description": "Job records and logs survive restarts."
+          },
+          "cluster_jobs": {
+            "type": "boolean",
+            "description": "Jobs from every replica are visible. When false, jobs are those of the replica that answered."
+          },
+          "audit_log": {
+            "type": "boolean",
+            "description": "User actions are stored and can be listed."
+          },
+          "shared_plans": {
+            "type": "boolean",
+            "description": "Plan details are stored centrally. When false, only the replica that ran the plan has them."
+          },
+          "shared_policy_output": {
+            "type": "boolean",
+            "description": "Policy check output is stored centrally. When false, only the replica that ran the check has it."
+          },
+          "shared_maintenance": {
+            "type": "boolean",
+            "description": "Maintenance windows are stored centrally. When false, windows live in memory on the replica that answered."
+          },
+          "shared_drift": {
+            "type": "boolean",
+            "description": "Drift results are stored centrally. When false, results live on the replica that received them."
+          }
+        },
+        "description": "Which data the store can answer across replicas and restarts. Data a flag marks as replica-local may differ between replicas."
+      },
+      "Repository": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "vcs_host",
+          "full_name"
+        ],
+        "properties": {
+          "vcs_host": {
+            "type": "string",
+            "description": "VCS host, such as github.com. Empty when Atlantis doesn't know it."
+          },
+          "full_name": {
+            "type": "string",
+            "description": "Repository full name, such as acme/infra."
+          }
+        }
+      },
+      "Changes": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "known",
+          "import",
+          "add",
+          "change",
+          "destroy",
+          "forget"
+        ],
+        "properties": {
+          "known": {
+            "type": "boolean",
+            "description": "False when the plan output isn't available, for example after a restart."
+          },
+          "import": {
+            "type": "integer"
+          },
+          "add": {
+            "type": "integer"
+          },
+          "change": {
+            "type": "integer"
+          },
+          "destroy": {
+            "type": "integer"
+          },
+          "forget": {
+            "type": "integer"
+          }
+        },
+        "description": "Resource change counts, as in Terraform's Plan line."
+      },
+      "Owners": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "users",
+          "teams"
+        ],
+        "properties": {
+          "users": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "teams": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "GitHub team slug in the repository's organization."
+            }
+          }
+        }
+      },
+      "PolicyApproval": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "by",
+          "current"
+        ],
+        "properties": {
+          "by": {
+            "type": "string"
+          },
+          "current": {
+            "type": "boolean",
+            "description": "False when the approval was for an earlier failure and no longer counts."
+          }
+        }
+      },
+      "PolicySet": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "passed",
+          "cleared",
+          "configured",
+          "required_approvals",
+          "current_approvals",
+          "approvals",
+          "owners",
+          "prevent_self_approve"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "cleared": {
+            "type": "boolean",
+            "description": "Passed, or has enough current approvals."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "False when the server-side repo config no longer has the set."
+          },
+          "required_approvals": {
+            "type": "integer"
+          },
+          "current_approvals": {
+            "type": "integer"
+          },
+          "approvals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PolicyApproval"
+            }
+          },
+          "owners": {
+            "$ref": "#/components/schemas/Owners"
+          },
+          "prevent_self_approve": {
+            "type": "boolean",
+            "description": "The pull request's author may not approve the set."
+          }
+        }
+      },
+      "Project": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "dir",
+          "workspace",
+          "name",
+          "state",
+          "changes",
+          "lock_id",
+          "latest_job_id",
+          "policy_failing",
+          "policies"
+        ],
+        "properties": {
+          "dir": {
+            "type": "string"
+          },
+          "workspace": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "Project name; empty when the project has none."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "running",
+              "planned",
+              "no_changes",
+              "applied",
+              "plan_failed",
+              "apply_failed",
+              "discarded",
+              "policy_failed",
+              "policy_passed"
+            ]
+          },
+          "changes": {
+            "$ref": "#/components/schemas/Changes"
+          },
+          "lock_id": {
+            "type": "string",
+            "description": "ID of the project's lock; empty when it holds none."
+          },
+          "latest_job_id": {
+            "type": "string",
+            "description": "Newest job the answering replica has output for; empty when none."
+          },
+          "policy_failing": {
+            "type": "boolean"
+          },
+          "policies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PolicySet"
+            }
+          }
+        }
+      },
+      "PullPermissions": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "unlock",
+          "approve_policies"
+        ],
+        "properties": {
+          "unlock": {
+            "type": "boolean",
+            "description": "The viewer may unlock this repository's projects."
+          },
+          "approve_policies": {
+            "type": "boolean",
+            "description": "The viewer's role allows approving policies in this repository. Approving also needs GitHub sign-in as a policy owner."
+          }
+        },
+        "description": "What the viewer may do, as the web UI decides it."
+      },
+      "Pull": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "repo",
+          "number",
+          "url",
+          "author",
+          "head_branch",
+          "base_branch",
+          "head_commit",
+          "state",
+          "changes",
+          "policy_failing",
+          "last_activity_at",
+          "projects",
+          "permissions"
+        ],
+        "properties": {
+          "repo": {
+            "$ref": "#/components/schemas/Repository"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "url": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string"
+          },
+          "head_branch": {
+            "type": "string"
+          },
+          "base_branch": {
+            "type": "string"
+          },
+          "head_commit": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "description": "The most urgent project state.",
+            "enum": [
+              "running",
+              "planned",
+              "no_changes",
+              "applied",
+              "plan_failed",
+              "apply_failed",
+              "discarded",
+              "policy_failed",
+              "policy_passed",
+              ""
+            ]
+          },
+          "changes": {
+            "$ref": "#/components/schemas/Changes"
+          },
+          "policy_failing": {
+            "type": "boolean"
+          },
+          "last_activity_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Newest lock or job time the answering replica knows. RFC 3339 in UTC; null when unknown."
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Project"
+            }
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/PullPermissions"
+          }
+        }
+      },
+      "LockPull": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "number",
+          "url",
+          "author",
+          "tracked"
+        ],
+        "properties": {
+          "number": {
+            "type": "integer"
+          },
+          "url": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string"
+          },
+          "tracked": {
+            "type": "boolean",
+            "description": "False when Atlantis has no status for the pull request, which usually means it was closed while the lock survived."
+          }
+        }
+      },
+      "Lock": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "repo",
+          "dir",
+          "workspace",
+          "project",
+          "pull",
+          "user",
+          "since",
+          "stale",
+          "permissions"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "repo": {
+            "$ref": "#/components/schemas/Repository"
+          },
+          "dir": {
+            "type": "string"
+          },
+          "workspace": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "pull": {
+            "$ref": "#/components/schemas/LockPull"
+          },
+          "user": {
+            "type": "string"
+          },
+          "since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the lock was taken. RFC 3339 in UTC; null when unknown."
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "The pull request is untracked or the lock is older than 7 days."
+          },
+          "permissions": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "unlock"
+            ],
+            "properties": {
+              "unlock": {
+                "type": "boolean",
+                "description": "The viewer may unlock this lock."
+              }
+            }
+          }
+        }
+      },
+      "Maintenance": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "repo",
+          "dir",
+          "workspace",
+          "project",
+          "plans",
+          "reason",
+          "by",
+          "since",
+          "until"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "repo": {
+            "$ref": "#/components/schemas/Repository"
+          },
+          "dir": {
+            "type": "string",
+            "description": "Empty covers every directory."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Empty covers every workspace."
+          },
+          "project": {
+            "type": "string",
+            "description": "Empty covers every project."
+          },
+          "plans": {
+            "type": "boolean",
+            "description": "Plans are frozen too, not only applies."
+          },
+          "reason": {
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the window started. RFC 3339 in UTC; null when unknown."
+          },
+          "until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the window ends by itself; null when it lasts until someone ends it. RFC 3339 in UTC; null when unknown."
+          }
+        }
+      },
+      "PullDetail": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "repo",
+          "number",
+          "url",
+          "author",
+          "head_branch",
+          "base_branch",
+          "head_commit",
+          "state",
+          "changes",
+          "policy_failing",
+          "last_activity_at",
+          "projects",
+          "permissions",
+          "locks",
+          "maintenance"
+        ],
+        "properties": {
+          "repo": {
+            "$ref": "#/components/schemas/Repository"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "url": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string"
+          },
+          "head_branch": {
+            "type": "string"
+          },
+          "base_branch": {
+            "type": "string"
+          },
+          "head_commit": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "description": "The most urgent project state.",
+            "enum": [
+              "running",
+              "planned",
+              "no_changes",
+              "applied",
+              "plan_failed",
+              "apply_failed",
+              "discarded",
+              "policy_failed",
+              "policy_passed",
+              ""
+            ]
+          },
+          "changes": {
+            "$ref": "#/components/schemas/Changes"
+          },
+          "policy_failing": {
+            "type": "boolean"
+          },
+          "last_activity_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Newest lock or job time the answering replica knows. RFC 3339 in UTC; null when unknown."
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Project"
+            }
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/PullPermissions"
+          },
+          "locks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Lock"
+            }
+          },
+          "maintenance": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Maintenance"
+            }
+          }
+        },
+        "description": "A pull request with the locks it holds and the maintenance windows that cover its repository."
+      },
+      "GlobalPermissions": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "lock_applies",
+          "maintenance"
+        ],
+        "properties": {
+          "lock_applies": {
+            "type": "boolean"
+          },
+          "maintenance": {
+            "type": "boolean"
+          }
+        },
+        "description": "What the viewer may do across every repository."
+      },
+      "Instance": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "shutting_down",
+          "in_progress_operations",
+          "database_ok",
+          "database_error",
+          "locking_backend",
+          "started_at",
+          "experiments",
+          "viewer",
+          "permissions"
+        ],
+        "properties": {
+          "version": {
+            "type": "string"
+          },
+          "shutting_down": {
+            "type": "boolean"
+          },
+          "in_progress_operations": {
+            "type": "integer"
+          },
+          "database_ok": {
+            "type": "boolean"
+          },
+          "database_error": {
+            "type": "string"
+          },
+          "locking_backend": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the answering replica started. RFC 3339 in UTC; null when unknown."
+          },
+          "experiments": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "viewer": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "provider",
+              "role"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string",
+                "description": "How the viewer signed in: oidc, github, proxy, basic, or none."
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "viewer",
+                  "operator",
+                  "admin"
+                ]
+              }
+            }
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/GlobalPermissions"
+          }
+        },
+        "description": "The replica that answered the request."
+      },
+      "ApplyLock": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "enabled",
+          "locked",
+          "since",
+          "permissions"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "False when the server disables the global apply lock."
+          },
+          "locked": {
+            "type": "boolean"
+          },
+          "since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When applies were locked. RFC 3339 in UTC; null when unknown."
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/GlobalPermissions"
+          }
+        }
+      },
+      "Job": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "repo",
+          "pull_number",
+          "dir",
+          "workspace",
+          "project",
+          "step",
+          "description",
+          "status",
+          "last_output_at",
+          "lines",
+          "stop",
+          "permissions"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "repo": {
+            "$ref": "#/components/schemas/Repository"
+          },
+          "pull_number": {
+            "type": "integer"
+          },
+          "dir": {
+            "type": "string"
+          },
+          "workspace": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "stalled means an unfinished job produced no output for a long time.",
+            "enum": [
+              "running",
+              "stalled",
+              "done"
+            ]
+          },
+          "last_output_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the job last wrote output. RFC 3339 in UTC; null when unknown."
+          },
+          "lines": {
+            "type": "integer",
+            "description": "Lines of output so far."
+          },
+          "stop": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "by",
+                  "at",
+                  "killed"
+                ],
+                "properties": {
+                  "by": {
+                    "type": "string"
+                  },
+                  "at": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time",
+                    "description": "When the stop was requested. RFC 3339 in UTC; null when unknown."
+                  },
+                  "killed": {
+                    "type": "boolean",
+                    "description": "The process ignored the interrupt and was killed."
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who stopped the job; null when nobody did."
+          },
+          "permissions": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "stop"
+            ],
+            "properties": {
+              "stop": {
+                "type": "boolean",
+                "description": "The job can be stopped and the viewer may stop it."
+              }
+            }
+          }
+        },
+        "description": "A job the answering replica has a record of. Jobs live in memory on the replica that ran them."
+      },
+      "ProjectRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "dir",
+          "workspace",
+          "name"
+        ],
+        "properties": {
+          "dir": {
+            "type": "string"
+          },
+          "workspace": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "Attribute": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "before",
+          "after",
+          "before_sensitive",
+          "after_sensitive",
+          "after_unknown",
+          "forces_replacement"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "before": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Value before; null when absent or sensitive."
+          },
+          "after": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Value after; null when absent, sensitive, or known only after apply."
+          },
+          "before_sensitive": {
+            "type": "boolean"
+          },
+          "after_sensitive": {
+            "type": "boolean"
+          },
+          "after_unknown": {
+            "type": "boolean"
+          },
+          "forces_replacement": {
+            "type": "boolean"
+          }
+        },
+        "description": "One attribute change. Values Terraform marks as sensitive are never returned."
+      },
+      "Resource": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "address",
+          "previous_address",
+          "module",
+          "type",
+          "name",
+          "provider",
+          "action",
+          "import_id",
+          "importing",
+          "deposed",
+          "reason",
+          "attributes",
+          "unchanged_attributes",
+          "omitted_attributes"
+        ],
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "previous_address": {
+            "type": "string"
+          },
+          "module": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "create",
+              "update",
+              "delete",
+              "replace",
+              "read",
+              "forget",
+              "import",
+              "move"
+            ]
+          },
+          "import_id": {
+            "type": "string"
+          },
+          "importing": {
+            "type": "boolean"
+          },
+          "deposed": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "attributes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Attribute"
+            }
+          },
+          "unchanged_attributes": {
+            "type": "integer",
+            "description": "Attributes that stay the same and aren't listed."
+          },
+          "omitted_attributes": {
+            "type": "integer",
+            "description": "Changed attributes dropped by the size limits."
+          }
+        }
+      },
+      "Plan": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "repo",
+          "pull_number",
+          "project",
+          "status",
+          "generated_at",
+          "size_bytes",
+          "terraform_version",
+          "changes",
+          "resources",
+          "total_resources",
+          "resources_omitted",
+          "attributes_omitted"
+        ],
+        "properties": {
+          "repo": {
+            "$ref": "#/components/schemas/Repository"
+          },
+          "pull_number": {
+            "type": "integer"
+          },
+          "project": {
+            "$ref": "#/components/schemas/ProjectRef"
+          },
+          "status": {
+            "type": "string",
+            "description": "Only ready plans have resources.",
+            "enum": [
+              "ready",
+              "no_saved_plan",
+              "no_json",
+              "outdated",
+              "too_large",
+              "unreadable"
+            ]
+          },
+          "generated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the plan JSON was written. RFC 3339 in UTC; null when unknown."
+          },
+          "size_bytes": {
+            "type": "integer"
+          },
+          "terraform_version": {
+            "type": "string"
+          },
+          "changes": {
+            "$ref": "#/components/schemas/Changes"
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Resource"
+            }
+          },
+          "total_resources": {
+            "type": "integer",
+            "description": "Resource changes in the plan before the size limit."
+          },
+          "resources_omitted": {
+            "type": "boolean"
+          },
+          "attributes_omitted": {
+            "type": "boolean"
+          }
+        },
+        "description": "A project's latest plan, read from the working directory of the answering replica."
+      },
+      "PolicySetDetail": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "passed",
+          "cleared",
+          "configured",
+          "required_approvals",
+          "current_approvals",
+          "approvals",
+          "owners",
+          "prevent_self_approve",
+          "output",
+          "can_approve",
+          "reason"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "cleared": {
+            "type": "boolean",
+            "description": "Passed, or has enough current approvals."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "False when the server-side repo config no longer has the set."
+          },
+          "required_approvals": {
+            "type": "integer"
+          },
+          "current_approvals": {
+            "type": "integer"
+          },
+          "approvals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PolicyApproval"
+            }
+          },
+          "owners": {
+            "$ref": "#/components/schemas/Owners"
+          },
+          "prevent_self_approve": {
+            "type": "boolean",
+            "description": "The pull request's author may not approve the set."
+          },
+          "output": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The policy tool's output; null when the answering replica doesn't have it."
+          },
+          "can_approve": {
+            "type": "boolean",
+            "description": "The viewer could approve this set in the web UI."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why the viewer can't approve the set; empty when they can or it is cleared."
+          }
+        }
+      },
+      "Policies": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "repo",
+          "pull_number",
+          "project",
+          "output_status",
+          "checked_at",
+          "admins",
+          "sets"
+        ],
+        "properties": {
+          "repo": {
+            "$ref": "#/components/schemas/Repository"
+          },
+          "pull_number": {
+            "type": "integer"
+          },
+          "project": {
+            "$ref": "#/components/schemas/ProjectRef"
+          },
+          "output_status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "missing",
+              "outdated",
+              "unreadable"
+            ]
+          },
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the policy output was written. RFC 3339 in UTC; null when unknown."
+          },
+          "admins": {
+            "$ref": "#/components/schemas/Owners"
+          },
+          "sets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PolicySetDetail"
+            }
+          }
+        }
+      },
+      "DriftCheck": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "repo",
+          "project",
+          "dir",
+          "workspace",
+          "ref",
+          "base_branch",
+          "commit",
+          "detection_id",
+          "status",
+          "changes_outside",
+          "changes",
+          "summary",
+          "error",
+          "checked_at",
+          "stale"
+        ],
+        "properties": {
+          "repo": {
+            "$ref": "#/components/schemas/Repository"
+          },
+          "project": {
+            "type": "string"
+          },
+          "dir": {
+            "type": "string"
+          },
+          "workspace": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string",
+            "description": "Branch, tag, or commit checked."
+          },
+          "base_branch": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "detection_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "drifted",
+              "in_sync",
+              "failed"
+            ]
+          },
+          "changes_outside": {
+            "type": "boolean",
+            "description": "Terraform reported changes made outside Terraform."
+          },
+          "changes": {
+            "$ref": "#/components/schemas/Changes"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the check ran. RFC 3339 in UTC; null when unknown."
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "Not checked in the last 24 hours."
+          }
+        }
+      },
+      "PullList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "next",
+          "capabilities"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Pull"
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor for the next page; null when this is the last page. Currently always null."
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/Capabilities"
+          }
+        }
+      },
+      "LockList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "next",
+          "capabilities"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Lock"
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor for the next page; null when this is the last page. Currently always null."
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/Capabilities"
+          }
+        }
+      },
+      "JobList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "next",
+          "capabilities"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Job"
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor for the next page; null when this is the last page. Currently always null."
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/Capabilities"
+          }
+        }
+      },
+      "MaintenanceList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "next",
+          "capabilities"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Maintenance"
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor for the next page; null when this is the last page. Currently always null."
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/Capabilities"
+          }
+        }
+      },
+      "DriftList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "next",
+          "capabilities",
+          "enabled",
+          "counts"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DriftCheck"
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor for the next page; null when this is the last page. Currently always null."
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/Capabilities"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "False when drift detection is off on this server."
+          },
+          "counts": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "total",
+              "drifted",
+              "failed",
+              "in_sync",
+              "stale"
+            ],
+            "properties": {
+              "total": {
+                "type": "integer"
+              },
+              "drifted": {
+                "type": "integer"
+              },
+              "failed": {
+                "type": "integer"
+              },
+              "in_sync": {
+                "type": "integer"
+              },
+              "stale": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      },
+      "InstanceItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "item",
+          "capabilities"
+        ],
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/Instance"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/Capabilities"
+          }
+        }
+      },
+      "PullDetailItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "item",
+          "capabilities"
+        ],
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/PullDetail"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/Capabilities"
+          }
+        }
+      },
+      "PlanItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "item",
+          "capabilities"
+        ],
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/Plan"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/Capabilities"
+          }
+        }
+      },
+      "PoliciesItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "item",
+          "capabilities"
+        ],
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/Policies"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/Capabilities"
+          }
+        }
+      },
+      "ApplyLockItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "item",
+          "capabilities"
+        ],
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/ApplyLock"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/Capabilities"
+          }
+        }
+      },
+      "JobItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "item",
+          "capabilities"
+        ],
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/Job"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/Capabilities"
+          }
+        }
+      }
+    }
+  }
+}
