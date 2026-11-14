@@ -362,9 +362,12 @@ func (m *Manager) sessionPath() string {
 	return m.base + "/"
 }
 
-// Logout clears the session cookie.
+// Logout clears the session cookie. It also clears a cookie under the UI
+// path, where earlier versions kept the session, so an old cookie can't keep
+// the user signed in.
 func (m *Manager) Logout(w http.ResponseWriter) {
 	http.SetCookie(w, m.cookie(sessionCookie, "", m.sessionPath(), time.Unix(0, 0)))
+	http.SetCookie(w, m.cookie(sessionCookie, "", m.base+"/ui", time.Unix(0, 0)))
 }
 
 func (m *Manager) cookie(name, value, cookiePath string, exp time.Time) *http.Cookie {
