@@ -407,7 +407,7 @@ func TestLogoutClearsSessionUnderOldPath(t *testing.T) {
 	u, _ := url.Parse(a.srv.URL + "/ui/")
 	current := c.Jar.Cookies(u)[0]
 	// Plant the same session under /ui, as the earlier cookie path did.
-	c.Jar.SetCookies(u, []*http.Cookie{{Name: current.Name, Value: current.Value, Path: "/ui", HttpOnly: true, SameSite: http.SameSiteLaxMode}})
+	c.Jar.SetCookies(u, []*http.Cookie{{Name: current.Name, Value: current.Value, Path: "/ui", HttpOnly: true, SameSite: http.SameSiteLaxMode}}) //nolint:gosec // test cookie on a plain-http test server
 	Equals(t, 2, len(c.Jar.Cookies(u)))
 
 	fetch(t, c, a.srv.URL+"/ui/logout")
