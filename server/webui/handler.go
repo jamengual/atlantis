@@ -154,7 +154,11 @@ func (h *Handler) Register(r *mux.Router) {
 	ui.Handle("/locks/discard", csrf.Handler(h.guard(webauth.ActionView, h.discardLocks))).Methods(http.MethodPost)
 	ui.Handle("/applies/lock", csrf.Handler(h.guard(webauth.ActionLockApplies, h.lockApplies))).Methods(http.MethodPost)
 	ui.Handle("/applies/unlock", csrf.Handler(h.guard(webauth.ActionLockApplies, h.unlockApplies))).Methods(http.MethodPost)
-	// Stopping is checked per job, against the job's repository.
+	ui.Handle("/maintenance", csrf.Handler(h.guard(webauth.ActionMaintenance, h.startMaintenance))).Methods(http.MethodPost)
+	ui.Handle("/maintenance/{id}/end", csrf.Handler(h.guard(webauth.ActionMaintenance, h.endMaintenance))).Methods(http.MethodPost)
+	// Stopping is checked per job, against the job's repository. Keep this
+	// route last: with gorilla/mux, a later route can turn a GET's 405 here
+	// into a 404.
 	ui.Handle("/jobs/{id}/stop", csrf.Handler(h.guard(webauth.ActionView, h.stopJob))).Methods(http.MethodPost)
 }
 
@@ -343,11 +347,12 @@ func (h *Handler) overview(w http.ResponseWriter, r *http.Request) {
 	m := h.metaWith(r, l, "Overview", "overview")
 	m.Crumbs = []crumb{{Label: "Overview"}}
 	h.render(w, r, http.StatusOK, overviewPage(m, overviewData{
-		Pulls:     pulls,
-		Locks:     locks,
-		Running:   running,
-		ApplyLock: al,
-		Attention: needsAttention(m.Now, pulls, locks, h.BasePath),
+		Pulls:       pulls,
+		Locks:       locks,
+		Running:     running,
+		ApplyLock:   al,
+		Attention:   needsAttention(m.Now, pulls, locks, h.BasePath),
+		Maintenance: h.Store.ListMaintenance(ctx),
 	}))
 }
 
@@ -393,8 +398,24 @@ func (h *Handler) pull(w http.ResponseWriter, r *http.Request) {
 			"It may not have been planned yet, or it was closed and cleaned up."))
 		return
 	}
+	locks, err := h.Store.ListLocks(r.Context())
+	if err != nil {
+		h.fail(w, r, "locks", err)
+		return
+	}
+	d := pullData{Pull: *p}
+	for _, l := range locks {
+		if lockHeldBy(l, p.Repo, p.Num) {
+			d.Locks = append(d.Locks, l)
+		}
+	}
+	for _, mw := range h.Store.ListMaintenance(r.Context()) {
+		if mw.CoversRepo(p.Repo) {
+			d.Maintenance = append(d.Maintenance, mw)
+		}
+	}
 	m := h.meta(r, fmt.Sprintf("%s #%d", p.Repo.FullName, p.Num), "pulls", pullsCrumb, crumb{Label: fmt.Sprintf("%s #%d", p.Repo.FullName, p.Num)})
-	h.render(w, r, http.StatusOK, pullPage(m, *p))
+	h.render(w, r, http.StatusOK, pullPage(m, d))
 }
 
 // plan shows the resource changes in one project's plan. The project is
@@ -459,8 +480,15 @@ func (h *Handler) locks(w http.ResponseWriter, r *http.Request) {
 	}
 	l := loaded{locks: locks}
 	l.have.locks = true
+	pulls, _ := h.Store.ListPulls(ctx)
 	m := h.metaWith(r, l, "Locks", "locks", crumb{Label: "Locks"})
-	h.render(w, r, http.StatusOK, locksPage(m, locksData{Locks: locks, ApplyLock: al}))
+	h.render(w, r, http.StatusOK, locksPage(m, locksData{
+		Locks:       locks,
+		Groups:      groupLocks(locks),
+		ApplyLock:   al,
+		Maintenance: h.Store.ListMaintenance(ctx),
+		KnownRepos:  knownRepoNames(pulls, locks),
+	}))
 }
 
 func (h *Handler) jobs(w http.ResponseWriter, r *http.Request) {
@@ -502,6 +530,10 @@ var flashes = map[string]string{
 	"stop-requested":   "Stop requested. Terraform got an interrupt and stops once the operations in progress finish, then releases its state lock. The pull request shows the job as failed.",
 	"already-stopping": "Someone already stopped this job. It ends once Terraform exits.",
 	"stop-finished":    "That job had already finished, so there was nothing to stop.",
+	"no-pull-locks":    "That pull request holds no locks now, so nothing was unlocked.",
+	"maint-started":    "Maintenance window started. Atlantis on this replica rejects the frozen commands and comments with your reason.",
+	"maint-ended":      "Maintenance window ended. Commands run again.",
+	"maint-gone":       "That maintenance window had already ended.",
 }
 
 func flashMessage(q url.Values) string {
@@ -564,55 +596,123 @@ func (h *Handler) uiPath(raw string) (string, bool) {
 	return cleaned, true
 }
 
+// discardLocks unlocks the selected locks, or, when the form names a pull
+// request, every lock that pull request holds. The user must be allowed to
+// unlock every lock before any is discarded. A failure doesn't stop the
+// others; the result page lists what was and wasn't unlocked.
 func (h *Handler) discardLocks(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "The form could not be read. Reload the page and try again.", http.StatusBadRequest)
 		return
 	}
+	locks, err := h.Store.ListLocks(r.Context())
+	if err != nil {
+		h.fail(w, r, "locks", err)
+		return
+	}
+	byID := map[string]Lock{}
+	for _, l := range locks {
+		byID[l.ID] = l
+	}
 	ids := r.PostForm["id"]
+	if key := r.PostFormValue("pull"); key != "" {
+		repo, num, ok := parsePullKey(key)
+		if !ok {
+			http.Error(w, "The pull request in the form is not valid. Reload the page and try again.", http.StatusBadRequest)
+			return
+		}
+		ids = nil
+		for _, l := range locks {
+			if lockHeldBy(l, repo, num) {
+				ids = append(ids, l.ID)
+			}
+		}
+		if len(ids) == 0 {
+			h.redirectBack(w, r, "/locks", url.Values{"done": {"no-pull-locks"}})
+			return
+		}
+	}
+	ids = slices.Compact(slices.Sorted(slices.Values(ids)))
 	if len(ids) == 0 {
 		h.redirectBack(w, r, "/locks", url.Values{"done": {"none-selected"}})
 		return
 	}
 	// Check every lock before discarding any, so a request either unlocks
 	// all the selected projects or none of them.
-	locks, err := h.Store.ListLocks(r.Context())
-	if err != nil {
-		h.fail(w, r, "locks", err)
-		return
-	}
-	repoOf := map[string]string{}
-	for _, l := range locks {
-		repoOf[l.ID] = repoID(l.Repo)
-	}
 	for _, id := range ids {
-		repo, known := repoOf[id]
-		if known && !h.allows(r, webauth.ActionUnlock, repo) {
-			h.forbidden(w, r, webauth.ActionUnlock, repo)
-			return
+		repo := ""
+		if l, known := byID[id]; known {
+			repo = repoID(l.Repo)
 		}
-		if !known && !h.allows(r, webauth.ActionUnlock, "") {
-			h.forbidden(w, r, webauth.ActionUnlock, "")
+		if !h.allows(r, webauth.ActionUnlock, repo) {
+			h.forbidden(w, r, webauth.ActionUnlock, repo)
 			return
 		}
 	}
 	who := actor(r)
-	unlocked, missing := 0, 0
+	res := discardResult{}
 	for _, id := range ids {
-		ok, err := h.Actions.DiscardLock(id, who)
-		if err != nil {
-			h.Logger.Err("web ui discarding lock %q: %s", id, err)
-			http.Error(w, fmt.Sprintf("Unlocking %q failed: %s. %d other locks were unlocked first. Check the lock database, then try again.", id, err, unlocked), http.StatusInternalServerError)
-			return
+		label := id
+		if l, known := byID[id]; known {
+			label = fmt.Sprintf("%s #%d %s", l.Repo.FullName, l.PullNum, lockLabel(l))
 		}
-		if ok {
-			unlocked++
+		ok, err := h.Actions.DiscardLock(id, who)
+		switch {
+		case err != nil:
+			h.Logger.Err("web ui discarding lock %q: %s", id, err)
+			res.Failed = append(res.Failed, discardFailure{Label: label, Err: err.Error()})
+		case ok:
 			h.Logger.Info("web ui discarded lock %q %s", id, auditFields(r))
-		} else {
-			missing++
+			res.Unlocked = append(res.Unlocked, label)
+		default:
+			res.Missing++
 		}
 	}
-	h.redirectBack(w, r, "/locks", url.Values{"done": {"unlocked"}, "n": {strconv.Itoa(unlocked)}, "missing": {strconv.Itoa(missing)}})
+	if len(res.Failed) > 0 {
+		res.Return = h.BasePath + "/ui/locks"
+		if ret, ok := h.uiPath(r.PostFormValue("return")); ok {
+			res.Return = ret
+		}
+		m := h.meta(r, "Some locks weren't unlocked", "locks", crumb{Label: "Locks", Href: h.BasePath + "/ui/locks"}, crumb{Label: "Unlock result"})
+		h.render(w, r, http.StatusInternalServerError, discardResultPage(m, res))
+		return
+	}
+	h.redirectBack(w, r, "/locks", url.Values{"done": {"unlocked"}, "n": {strconv.Itoa(len(res.Unlocked))}, "missing": {strconv.Itoa(res.Missing)}})
+}
+
+// discardResult is what a bulk unlock did, shown when part of it failed.
+type discardResult struct {
+	Unlocked []string
+	Failed   []discardFailure
+	Missing  int
+	Return   string
+}
+
+type discardFailure struct {
+	Label string
+	Err   string
+}
+
+// pullKey identifies a pull request in a form value.
+func pullKey(repo Repository, num int) string {
+	return repo.VCSHost + "|" + repo.FullName + "|" + strconv.Itoa(num)
+}
+
+func parsePullKey(key string) (Repository, int, bool) {
+	parts := strings.Split(key, "|")
+	if len(parts) != 3 || parts[1] == "" {
+		return Repository{}, 0, false
+	}
+	num, err := strconv.Atoi(parts[2])
+	if err != nil || num <= 0 {
+		return Repository{}, 0, false
+	}
+	return Repository{VCSHost: parts[0], FullName: parts[1]}, num, true
+}
+
+// lockHeldBy reports whether a pull request holds a lock.
+func lockHeldBy(l Lock, repo Repository, num int) bool {
+	return l.PullNum == num && l.Repo.FullName == repo.FullName && sameHost(l.Repo.VCSHost, repo.VCSHost)
 }
 
 func (h *Handler) lockApplies(w http.ResponseWriter, r *http.Request) {
@@ -672,6 +772,159 @@ func (h *Handler) stopJob(w http.ResponseWriter, r *http.Request) {
 	}
 	h.Logger.Info("web ui stopped job %q repo=%q pull=%d step=%q dir=%q workspace=%q %s", id, repo, j.PullNum, j.Step, j.Dir, j.Workspace, auditFields(r))
 	h.redirectBack(w, r, back, url.Values{"done": {"stop-requested"}})
+}
+
+// maintenanceDurations are the end times a maintenance window can have,
+// chosen by key so the form can't set arbitrary ones.
+var maintenanceDurations = []struct {
+	Key   string
+	Label string
+	D     time.Duration
+}{
+	{"", "No end time, until someone ends it", 0},
+	{"1h", "1 hour", time.Hour},
+	{"4h", "4 hours", 4 * time.Hour},
+	{"12h", "12 hours", 12 * time.Hour},
+	{"24h", "1 day", 24 * time.Hour},
+	{"72h", "3 days", 72 * time.Hour},
+	{"168h", "1 week", 168 * time.Hour},
+}
+
+// startMaintenance starts a maintenance window. Windows live in memory on
+// this replica, so they only block commands this replica runs.
+func (h *Handler) startMaintenance(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "The form could not be read. Reload the page and try again.", http.StatusBadRequest)
+		return
+	}
+	f := r.PostForm
+	req := MaintenanceRequest{
+		Repo:        Repository{FullName: strings.TrimSpace(f.Get("repo"))},
+		Dir:         strings.TrimSpace(f.Get("dir")),
+		Workspace:   strings.TrimSpace(f.Get("workspace")),
+		ProjectName: strings.TrimSpace(f.Get("project")),
+		Plans:       f.Get("plans") == "on",
+		Reason:      f.Get("reason"),
+	}
+	found := false
+	for _, d := range maintenanceDurations {
+		if d.Key == f.Get("duration") {
+			found = true
+			if d.D > 0 {
+				req.Until = h.now().Add(d.D)
+			}
+		}
+	}
+	if !found {
+		http.Error(w, "Choose when the maintenance window ends from the list, then try again.", http.StatusBadRequest)
+		return
+	}
+	// Pin the window to the repository's VCS host when Atlantis knows the
+	// repository on exactly one host; otherwise it covers every host.
+	pulls, _ := h.Store.ListPulls(r.Context())
+	locks, _ := h.Store.ListLocks(r.Context())
+	hosts := map[string]bool{}
+	for _, repo := range knownRepos(pulls, locks) {
+		if strings.EqualFold(repo.FullName, req.Repo.FullName) && repo.VCSHost != "" {
+			hosts[repo.VCSHost] = true
+		}
+	}
+	if len(hosts) == 1 {
+		for host := range hosts {
+			req.Repo.VCSHost = host
+		}
+	}
+	who := actor(r)
+	if who == "" {
+		who = "an anonymous user"
+	}
+	mw, err := h.Actions.StartMaintenance(req, who)
+	if err != nil {
+		h.Logger.Info("web ui maintenance window rejected repo=%q: %s %s", req.Repo.FullName, err, auditFields(r))
+		http.Error(w, fmt.Sprintf("The maintenance window wasn't started: %s. Go back, fix the form, and try again.", err), http.StatusBadRequest)
+		return
+	}
+	h.Logger.Info("web ui started maintenance window %q repo=%q host=%q dir=%q workspace=%q project=%q plans=%t until=%q reason=%q %s",
+		mw.ID, mw.Repo.FullName, mw.Repo.VCSHost, mw.Dir, mw.Workspace, mw.ProjectName, mw.Plans, untilText(mw.Until), mw.Reason, auditFields(r))
+	h.redirectBack(w, r, "/locks", url.Values{"done": {"maint-started"}})
+}
+
+func untilText(t time.Time) string {
+	if t.IsZero() {
+		return "none"
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+func (h *Handler) endMaintenance(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	mw, ok, err := h.Actions.EndMaintenance(id)
+	if err != nil {
+		h.Logger.Err("web ui ending maintenance window %q: %s", id, err)
+		http.Error(w, fmt.Sprintf("Ending the maintenance window failed: %s.", err), http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		h.redirectBack(w, r, "/locks", url.Values{"done": {"maint-gone"}})
+		return
+	}
+	h.Logger.Info("web ui ended maintenance window %q repo=%q set by %q %s", id, mw.Repo.FullName, mw.By, auditFields(r))
+	h.redirectBack(w, r, "/locks", url.Values{"done": {"maint-ended"}})
+}
+
+// knownRepos lists the repositories Atlantis has pull requests or locks
+// for, once each.
+func knownRepos(pulls []PullRequest, locks []Lock) []Repository {
+	seen := map[Repository]bool{}
+	var out []Repository
+	add := func(r Repository) {
+		if r.FullName != "" && !seen[r] {
+			seen[r] = true
+			out = append(out, r)
+		}
+	}
+	for _, p := range pulls {
+		add(p.Repo)
+	}
+	for _, l := range locks {
+		add(l.Repo)
+	}
+	return out
+}
+
+// knownRepoNames lists repository names for the maintenance form, sorted.
+func knownRepoNames(pulls []PullRequest, locks []Lock) []string {
+	var names []string
+	for _, r := range knownRepos(pulls, locks) {
+		names = append(names, r.FullName)
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
+}
+
+// lockGroup is the locks one pull request holds.
+type lockGroup struct {
+	Repo    Repository
+	PullNum int
+	Locks   []Lock
+}
+
+// groupLocks groups locks by pull request, keeping the order of each
+// group's newest lock.
+func groupLocks(locks []Lock) []lockGroup {
+	var groups []lockGroup
+	index := map[string]int{}
+	for _, l := range locks {
+		key := pullKey(l.Repo, l.PullNum)
+		i, ok := index[key]
+		if !ok {
+			i = len(groups)
+			index[key] = i
+			groups = append(groups, lockGroup{Repo: l.Repo, PullNum: l.PullNum})
+		}
+		groups[i].Locks = append(groups[i].Locks, l)
+	}
+	return groups
 }
 
 // ---------- log stream ----------

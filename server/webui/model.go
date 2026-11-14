@@ -12,6 +12,7 @@ package webui
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -120,6 +121,48 @@ type ApplyLock struct {
 	Since   time.Time
 }
 
+// MaintenanceWindow freezes applies, and optionally plans, in a repository
+// or in one directory, workspace, or project of it. Empty Dir, Workspace and
+// ProjectName cover every value; an empty Repo.VCSHost covers every host.
+type MaintenanceWindow struct {
+	ID          string
+	Repo        Repository
+	Dir         string
+	Workspace   string
+	ProjectName string
+	// Plans is true when plans are frozen too, not only applies.
+	Plans  bool
+	Reason string
+	By     string
+	Since  time.Time
+	// Until is when the window ends by itself; zero means it lasts until
+	// someone ends it.
+	Until time.Time
+}
+
+// RepoWide reports whether the window covers the whole repository.
+func (w MaintenanceWindow) RepoWide() bool {
+	return w.Dir == "" && w.Workspace == "" && w.ProjectName == ""
+}
+
+// CoversRepo reports whether the window applies to some or all of a
+// repository.
+func (w MaintenanceWindow) CoversRepo(r Repository) bool {
+	return strings.EqualFold(w.Repo.FullName, r.FullName) && sameHost(w.Repo.VCSHost, r.VCSHost)
+}
+
+// MaintenanceRequest asks for a new maintenance window.
+type MaintenanceRequest struct {
+	Repo        Repository
+	Dir         string
+	Workspace   string
+	ProjectName string
+	Plans       bool
+	Reason      string
+	// Until is zero for a window without an end time.
+	Until time.Time
+}
+
 // Job is one command run for a project, such as a plan or an apply. Jobs are
 // matched to pull requests by repository name, and carry the VCS host when
 // the output handler recorded it.
@@ -195,6 +238,10 @@ type Capabilities struct {
 	// SharedPlans is true when plan details are stored centrally and any
 	// replica can show them.
 	SharedPlans bool
+	// SharedMaintenance is true when maintenance windows are stored
+	// centrally, so they block commands on every replica and survive
+	// restarts.
+	SharedMaintenance bool
 }
 
 // ProjectRef identifies a project within a pull request.
@@ -251,6 +298,8 @@ type Store interface {
 	GetPlan(ctx context.Context, repo Repository, num int, project ProjectRef) (*ProjectPlan, error)
 	ListLocks(ctx context.Context) ([]Lock, error)
 	ApplyLock(ctx context.Context) (ApplyLock, error)
+	// ListMaintenance returns the active maintenance windows, oldest first.
+	ListMaintenance(ctx context.Context) []MaintenanceWindow
 	ListJobs(ctx context.Context, f JobFilter) []Job
 	GetJob(ctx context.Context, id string) (Job, bool)
 	// JobLog streams a job's output starting after the first `from` lines,
@@ -277,4 +326,9 @@ type Actions interface {
 	// It returns the stop and whether this call made it; when the job was
 	// already stopped, it returns the earlier stop.
 	StopJob(id string, actor string) (JobStop, bool, error)
+	// StartMaintenance starts a maintenance window on behalf of actor.
+	StartMaintenance(req MaintenanceRequest, actor string) (MaintenanceWindow, error)
+	// EndMaintenance ends a window. It returns false when no active window
+	// has the ID.
+	EndMaintenance(id string) (MaintenanceWindow, bool, error)
 }

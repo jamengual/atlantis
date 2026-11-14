@@ -76,6 +76,9 @@ type LegacyStore struct {
 	PlanLimits PlanLimits
 	// Stops says which jobs were stopped. Nil means none were.
 	Stops JobStops
+	// Maintenance holds this replica's maintenance windows. Nil means
+	// there are none.
+	Maintenance *locking.Maintenance
 
 	changesCache sync.Map // job ID -> Changes
 	countsCache  sync.Map // plan JSON path -> cachedCounts
@@ -346,6 +349,30 @@ func (s *LegacyStore) ApplyLock(_ context.Context) (ApplyLock, error) {
 	return ApplyLock{Locked: l.Locked, Enabled: l.GlobalApplyLockEnabled, Since: l.Time}, nil
 }
 
+func (s *LegacyStore) ListMaintenance(_ context.Context) []MaintenanceWindow {
+	active := s.Maintenance.Active()
+	out := make([]MaintenanceWindow, 0, len(active))
+	for _, w := range active {
+		out = append(out, toMaintenanceWindow(w))
+	}
+	return out
+}
+
+func toMaintenanceWindow(w locking.MaintenanceWindow) MaintenanceWindow {
+	return MaintenanceWindow{
+		ID:          w.ID,
+		Repo:        Repository{VCSHost: w.Host, FullName: w.RepoName},
+		Dir:         w.Dir,
+		Workspace:   w.Workspace,
+		ProjectName: w.Project,
+		Plans:       w.Plans,
+		Reason:      w.Reason,
+		By:          w.By,
+		Since:       w.Since,
+		Until:       w.Until,
+	}
+}
+
 // JobStops reports stopped jobs. *jobs.ProcessRegistry implements it.
 type JobStops interface {
 	Stopped(jobID string) (jobs.StopInfo, bool)
@@ -473,6 +500,9 @@ type LegacyActions struct {
 	Stopper interface {
 		Stop(jobID, by string) (jobs.StopInfo, bool)
 	}
+	// Maintenance holds this replica's maintenance windows. Nil means
+	// windows can't be started.
+	Maintenance *locking.Maintenance
 }
 
 var _ Actions = (*LegacyActions)(nil)
@@ -500,4 +530,37 @@ func (a *LegacyActions) StopJob(id string, actor string) (JobStop, bool, error) 
 	}
 	info, first := a.Stopper.Stop(id, actor)
 	return *toJobStop(info), first, nil
+}
+
+// ErrMaintenanceUnavailable is returned when this replica can't hold
+// maintenance windows.
+var ErrMaintenanceUnavailable = errors.New("this replica doesn't hold maintenance windows")
+
+func (a *LegacyActions) StartMaintenance(req MaintenanceRequest, actor string) (MaintenanceWindow, error) {
+	if a.Maintenance == nil {
+		return MaintenanceWindow{}, ErrMaintenanceUnavailable
+	}
+	w, err := a.Maintenance.Start(locking.MaintenanceWindow{
+		Host:      req.Repo.VCSHost,
+		RepoName:  req.Repo.FullName,
+		Dir:       req.Dir,
+		Workspace: req.Workspace,
+		Project:   req.ProjectName,
+		Plans:     req.Plans,
+		Reason:    req.Reason,
+		By:        actor,
+		Until:     req.Until,
+	})
+	if err != nil {
+		return MaintenanceWindow{}, err
+	}
+	return toMaintenanceWindow(w), nil
+}
+
+func (a *LegacyActions) EndMaintenance(id string) (MaintenanceWindow, bool, error) {
+	if a.Maintenance == nil {
+		return MaintenanceWindow{}, false, ErrMaintenanceUnavailable
+	}
+	w, ok := a.Maintenance.End(id)
+	return toMaintenanceWindow(w), ok, nil
 }

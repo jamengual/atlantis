@@ -290,3 +290,28 @@ button.chip { cursor: pointer; font: inherit; font-size: 12.5px; }
   .res-body { padding-left: 14px; }
   .attrs li { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* maintenance windows and bulk unlock */
+textarea { font: inherit; color: inherit; }
+.banner.maint { align-items: flex-start; background: var(--chg-soft); border-color: color-mix(in oklab, var(--chg) 40%, var(--rule)); }
+.maint-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; overflow-wrap: anywhere; }
+.maint-new { padding: 10px 14px; border-bottom: 1px solid var(--rule); }
+.maint-new > summary { list-style: none; display: inline-flex; }
+.maint-new > summary::-webkit-details-marker { display: none; }
+.maint-form { display: grid; grid-template-columns: max-content minmax(0, 420px); gap: 8px 14px; align-items: center; margin-top: 12px; }
+.maint-form input:not([type="checkbox"]), .maint-form textarea, .maint-form select { width: 100%; padding: 6px 9px; border: 1px solid var(--rule); border-radius: var(--r-s); background: var(--surface); }
+.maint-form textarea { resize: vertical; }
+.maint-form .check { grid-column: 2; display: flex; gap: 8px; align-items: center; }
+.maint-form .hint { grid-column: 2; margin: 0; font-size: 12.5px; }
+.maint-form .btn { grid-column: 2; justify-self: start; }
+.tbl td.reason { overflow-wrap: anywhere; min-width: 180px; }
+.tbl tr.lockgroup td { background: color-mix(in oklab, var(--sunk) 55%, transparent); padding-top: 7px; padding-bottom: 7px; }
+.groupbar { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.groupbar details.confirm[open] { flex-basis: 100%; }
+.groupbar .inline-confirm { position: static; margin-top: 8px; max-width: 100%; box-shadow: none; }
+.lock-names { margin: 0; padding-left: 18px; overflow-wrap: anywhere; }
+.result-list { margin: 0; padding: 12px 14px 12px 32px; display: flex; flex-direction: column; gap: 6px; overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .maint-form { grid-template-columns: minmax(0, 1fr); }
+  .maint-form .check, .maint-form .hint, .maint-form .btn { grid-column: 1; }
+}

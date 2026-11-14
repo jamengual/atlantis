@@ -37,6 +37,7 @@ access:
   permissions:
     unlock: Admin
     stop_job: Admin
+    maintenance: Operator
     lock_applies: admin
   enforce_in_pr_comments: true
 repos:
@@ -58,7 +59,7 @@ repos:
 		Viewer:   []valid.AccessRule{{Domain: "acme.com"}, {Everyone: true}},
 	}, cfg.Access.Roles)
 	Equals(t, "none", cfg.Access.Default)
-	Equals(t, valid.AccessPermissions{Unlock: "admin", LockApplies: "admin", StopJob: "admin"}, cfg.Access.Permissions)
+	Equals(t, valid.AccessPermissions{Unlock: "admin", LockApplies: "admin", StopJob: "admin", Maintenance: "operator"}, cfg.Access.Permissions)
 	Equals(t, true, cfg.Access.EnforceInPRComments)
 
 	repo := cfg.MatchingRepo("github.com/acme/data-lake")
@@ -91,6 +92,9 @@ func TestParseGlobalCfg_AccessErrors(t *testing.T) {
 		"unknown stop job role":       {"access:\n  permissions:\n    stop_job: root\n", "access.permissions.stop_job: unknown role"},
 		"per-repo stop job none":      {"repos:\n  - id: /.*/\n    access:\n      permissions:\n        stop_job: none\n", "permissions.stop_job: an action can't require the none role"},
 		"per-repo stop job unknown":   {"repos:\n  - id: /.*/\n    access:\n      permissions:\n        stop_job: boss\n", "permissions.stop_job: unknown role"},
+		"maintenance needs none":      {"access:\n  permissions:\n    maintenance: none\n", "access.permissions.maintenance: an action can't require the none role"},
+		"unknown maintenance role":    {"access:\n  permissions:\n    maintenance: root\n", "access.permissions.maintenance: unknown role"},
+		"per-repo maintenance":        {"repos:\n  - id: /.*/\n    access:\n      permissions:\n        maintenance: operator\n", "maintenance windows are managed for every repo"},
 		"unknown key":                 {"access:\n  roles:\n    admin:\n      - team: x\n", "team"},
 	}
 	for name, tc := range cases {

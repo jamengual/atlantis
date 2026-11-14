@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/runatlantis/atlantis/server/core/config/valid"
+	"github.com/runatlantis/atlantis/server/core/locking"
 	"github.com/runatlantis/atlantis/server/core/runtime"
 	"github.com/runatlantis/atlantis/server/events/command"
 	"github.com/runatlantis/atlantis/server/events/models"
@@ -377,6 +378,21 @@ type DefaultProjectCommandRunner struct {
 	// job runs no further steps, and a stopped plan leaves no plan to apply.
 	// Nil means jobs can't be stopped.
 	Processes *jobs.ProcessRegistry
+	// Maintenance holds the maintenance windows set in the web UI. A
+	// project a window covers can't be applied, or planned when the window
+	// freezes plans too. Nil means there are none.
+	Maintenance *locking.Maintenance
+}
+
+// maintenanceErr returns an error when a maintenance window freezes the
+// command for the project.
+func (p *DefaultProjectCommandRunner) maintenanceErr(ctx command.ProjectContext, cmdName command.Name) error {
+	w, blocked := p.Maintenance.Blocking(cmdName, ctx.Pull.BaseRepo, ctx.RepoRelDir, ctx.Workspace, ctx.ProjectName)
+	if !blocked {
+		return nil
+	}
+	ctx.Log.Info("rejecting %q for dir %q workspace %q, maintenance window %q by %q is active", cmdName.String(), ctx.RepoRelDir, ctx.Workspace, w.ID, w.By)
+	return errors.New(w.Explain(cmdName))
 }
 
 // checkVarFilesResolved rejects comment var-file arguments that resolve, with
@@ -404,6 +420,9 @@ func (p *DefaultProjectCommandRunner) workingDirLockMetadata(ctx command.Project
 
 // Plan runs terraform plan for the project described by ctx.
 func (p *DefaultProjectCommandRunner) Plan(ctx command.ProjectContext) command.ProjectCommandOutput {
+	if err := p.maintenanceErr(ctx, command.Plan); err != nil {
+		return command.ProjectCommandOutput{Error: err}
+	}
 	planSuccess, failure, err := p.doPlan(ctx)
 	return command.ProjectCommandOutput{
 		PlanSuccess: planSuccess,
@@ -424,6 +443,9 @@ func (p *DefaultProjectCommandRunner) PolicyCheck(ctx command.ProjectContext) co
 
 // Apply runs terraform apply for the project described by ctx.
 func (p *DefaultProjectCommandRunner) Apply(ctx command.ProjectContext) command.ProjectCommandOutput {
+	if err := p.maintenanceErr(ctx, command.Apply); err != nil {
+		return command.ProjectCommandOutput{Error: err}
+	}
 	applyOut, applyURL, failure, err := p.doApply(ctx)
 	return command.ProjectCommandOutput{
 		Failure:         failure,
@@ -453,6 +475,9 @@ func (p *DefaultProjectCommandRunner) Version(ctx command.ProjectContext) comman
 
 // Import runs terraform import for the project described by ctx.
 func (p *DefaultProjectCommandRunner) Import(ctx command.ProjectContext) command.ProjectCommandOutput {
+	if err := p.maintenanceErr(ctx, command.Import); err != nil {
+		return command.ProjectCommandOutput{Error: err}
+	}
 	importSuccess, failure, err := p.doImport(ctx)
 	return command.ProjectCommandOutput{
 		ImportSuccess: importSuccess,
@@ -463,6 +488,9 @@ func (p *DefaultProjectCommandRunner) Import(ctx command.ProjectContext) command
 
 // StateRm runs terraform state rm for the project described by ctx.
 func (p *DefaultProjectCommandRunner) StateRm(ctx command.ProjectContext) command.ProjectCommandOutput {
+	if err := p.maintenanceErr(ctx, command.State); err != nil {
+		return command.ProjectCommandOutput{Error: err}
+	}
 	stateRmSuccess, failure, err := p.doStateRm(ctx)
 	return command.ProjectCommandOutput{
 		StateRmSuccess: stateRmSuccess,

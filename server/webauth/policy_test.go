@@ -144,3 +144,38 @@ func TestPolicy_StopJob(t *testing.T) {
 	Equals(t, webauth.RoleAdmin, s.Repos[1].StopJob)
 	Equals(t, webauth.RoleNone, s.Repos[1].Unlock)
 }
+
+func TestPolicy_Maintenance(t *testing.T) {
+	p, err := webauth.NewPolicy(webauth.PolicyConfig{
+		Access: &valid.Access{
+			Roles: valid.AccessRoles{
+				Admin:    []valid.AccessRule{{Group: "platform-admins"}},
+				Operator: []valid.AccessRule{{Group: "sre"}},
+			},
+		},
+		Repos: []valid.Repo{
+			{ID: "github.com/acme/data-lake", Access: &valid.RepoAccess{Roles: valid.AccessRoles{Admin: []valid.AccessRule{{Group: "data-eng"}}}}},
+		},
+	})
+	Ok(t, err)
+	admin := webauth.Subject{Groups: []string{"platform-admins"}}
+	sre := webauth.Subject{Groups: []string{"sre"}}
+	dataEng := webauth.Subject{Groups: []string{"data-eng"}}
+	Equals(t, webauth.RoleAdmin, p.Requires(webauth.ActionMaintenance, ""))
+	Assert(t, p.Allows(admin, webauth.RoleNone, webauth.ActionMaintenance, ""), "admins manage maintenance")
+	Assert(t, !p.Allows(sre, webauth.RoleNone, webauth.ActionMaintenance, ""), "operators don't by default")
+	// Maintenance is global, so a per-repo admin grant doesn't reach it,
+	// even when asked about that repo.
+	Assert(t, !webauth.ActionMaintenance.PerRepo(), "maintenance is global")
+	Assert(t, !p.Allows(dataEng, webauth.RoleNone, webauth.ActionMaintenance, "github.com/acme/data-lake"), "a repo grant doesn't reach maintenance")
+	Equals(t, "Start and end maintenance windows that freeze applies", webauth.ActionMaintenance.Describe())
+
+	relaxed, err := webauth.NewPolicy(webauth.PolicyConfig{Access: &valid.Access{
+		Roles:       valid.AccessRoles{Operator: []valid.AccessRule{{Group: "sre"}}},
+		Permissions: valid.AccessPermissions{Maintenance: "operator"},
+	}})
+	Ok(t, err)
+	Assert(t, relaxed.Allows(sre, webauth.RoleNone, webauth.ActionMaintenance, ""), "the requirement can be changed")
+	Equals(t, webauth.ActionMaintenance, relaxed.Summarize().Requirements[3].Action)
+	Equals(t, webauth.RoleOperator, relaxed.Summarize().Requirements[3].Role)
+}
