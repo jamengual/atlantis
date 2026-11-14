@@ -4,6 +4,7 @@
 package server_test
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -110,6 +111,38 @@ func TestSetupRoutes_ExperimentGates(t *testing.T) {
 				var match mux.RouteMatch
 				Assert(t, s.Router.Match(httptest.NewRequest("GET", path, nil), &match), "health route %s was gated", path)
 			}
+		})
+	}
+}
+
+func TestNewServer_WiresWebUIExperiment(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("enabled=%v", enabled), func(t *testing.T) {
+			var names []string
+			if enabled {
+				names = []string{"web-ui"}
+			}
+			s, err := server.NewServer(server.UserConfig{
+				DataDir: t.TempDir(), AtlantisURL: testAtlantisUrl,
+				LockingDBType: testLockingDBType, GithubHostname: testGitHubHostName, GithubUser: testGitHubUser,
+				Experiments: names,
+			}, server.Config{AtlantisVersion: testAtlantisVersion})
+			Ok(t, err)
+			Equals(t, enabled, s.WebUI != nil)
+			s.SetupRoutes()
+			for _, path := range []string{"/ui", "/ui/pulls", "/ui/locks", "/ui/static/app.css"} {
+				var match mux.RouteMatch
+				Equals(t, enabled, s.Router.Match(httptest.NewRequest("GET", path, nil), &match))
+			}
+			if enabled {
+				response := httptest.NewRecorder()
+				s.Router.ServeHTTP(response, httptest.NewRequest("GET", "/ui", nil))
+				Equals(t, http.StatusOK, response.Code)
+				Assert(t, strings.Contains(response.Body.String(), "Overview"), "overview did not render")
+			}
+			// The existing UI keeps serving the root either way.
+			var match mux.RouteMatch
+			Assert(t, s.Router.Match(httptest.NewRequest("GET", "/", nil), &match), "index route missing")
 		})
 	}
 }

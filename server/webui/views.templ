@@ -1,0 +1,721 @@
+// Copyright 2026 The Atlantis Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package webui
+
+import (
+	"fmt"
+	"time"
+)
+
+// meta is the data every page shares.
+type meta struct {
+	Title    string
+	Nav      string
+	Base     string
+	Now      time.Time
+	Instance Instance
+	Caps     Capabilities
+	Actor    string
+	Flash    string
+	Crumbs   []crumb
+	Counts   navCounts
+}
+
+type crumb struct {
+	Label string
+	Href  string
+}
+
+type navCounts struct {
+	Pulls int
+	Locks int
+	Jobs  int
+}
+
+func (m meta) url(path string) templ.SafeURL {
+	return templ.SafeURL(m.Base + "/ui" + path)
+}
+
+func (m meta) asset(name string) string {
+	return m.Base + "/ui/static/" + name + "?v=" + assetVersion
+}
+
+templ layout(m meta) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<meta name="htmx-config" content='{"includeIndicatorCSS":false}'/>
+			<title>{ m.Title } · Atlantis</title>
+			<link rel="icon" href={ m.Base + "/static/images/atlantis-icon.png" }/>
+			<link rel="stylesheet" href={ m.asset("app.css") }/>
+			<script src={ m.asset("htmx.min.js") } defer></script>
+			<script src={ m.asset("app.js") } type="module"></script>
+		</head>
+		<body>
+			<div class="app">
+				<aside class="rail">
+					<a class="brand" href={ m.url("") }>
+						@brandMark()
+						Atlantis
+					</a>
+					<div class="fleet-mini" aria-label="This replica">
+						<div class="row"><span>Database</span>
+							if m.Instance.DatabaseOK {
+								<span class="pill ok">{ m.Instance.LockingBackend }</span>
+							} else {
+								<span class="pill bad">Unreachable</span>
+							}
+						</div>
+						<div class="row"><span>Replica</span>
+							if m.Instance.ShuttingDown {
+								<span class="pill warn">Draining</span>
+							} else {
+								<span class="pill ok">Serving</span>
+							}
+						</div>
+					</div>
+					<nav class="nav" aria-label="Main">
+						@navLink(m, "overview", "", "Overview", "home", 0)
+						@navLink(m, "pulls", "/pulls", "Pull requests", "pr", m.Counts.Pulls)
+						@navLink(m, "locks", "/locks", "Locks", "lock", m.Counts.Locks)
+						@navLink(m, "jobs", "/jobs", "Jobs", "jobs", m.Counts.Jobs)
+						<div class="group">Operate</div>
+						@navLink(m, "replica", "/replica", "This replica", "server", 0)
+					</nav>
+					<div class="me">
+						<span class="avatar" aria-hidden="true">{ initials(m.Actor) }</span>
+						<span>
+							if m.Actor != "" {
+								{ m.Actor }
+								<small>Signed in with basic auth</small>
+							} else {
+								Anonymous
+								<small>Web sign-in is off</small>
+							}
+						</span>
+					</div>
+				</aside>
+				<div class="main">
+					<header class="bar">
+						<nav class="crumbs" aria-label="Breadcrumb">
+							for i, c := range m.Crumbs {
+								if i < len(m.Crumbs)-1 {
+									<a href={ templ.SafeURL(c.Href) }>{ c.Label }</a>
+									<span class="sep" aria-hidden="true">/</span>
+								} else {
+									<span aria-current="page">{ c.Label }</span>
+								}
+							}
+						</nav>
+						<span class="spacer"></span>
+						<button class="kbtn" type="button" data-palette aria-label="Search or jump to (Command K)">
+							@icon("search")
+							<span>Search or jump to</span>
+							<kbd>⌘K</kbd>
+						</button>
+						<button class="iconbtn" type="button" data-theme-toggle aria-label="Switch between light and dark">
+							@icon("moon")
+						</button>
+					</header>
+					if m.Flash != "" {
+						<div class="flash" role="status">{ m.Flash }</div>
+					}
+					<main class="view" id="view">
+						{ children... }
+					</main>
+				</div>
+			</div>
+			<template id="palette-items">
+				<a href={ m.url("") } data-kind="Page">Overview</a>
+				<a href={ m.url("/pulls") } data-kind="Page">Pull requests</a>
+				<a href={ m.url("/locks") } data-kind="Page">Locks</a>
+				<a href={ m.url("/jobs") } data-kind="Page">Jobs</a>
+				<a href={ m.url("/replica") } data-kind="Page">This replica</a>
+			</template>
+		</body>
+	</html>
+}
+
+templ navLink(m meta, key, path, label, iconName string, count int) {
+	<a
+		href={ m.url(path) }
+		if m.Nav == key {
+			aria-current="page"
+		}
+	>
+		@icon(iconName)
+		{ label }
+		if count > 0 {
+			<span class="count">{ itoa(count) }</span>
+		}
+	</a>
+}
+
+templ brandMark() {
+	<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true" class="brandmark">
+		<path class="bm-roof" d="M6 11V7l6-4 6 4v4"></path>
+		<path class="bm-wave" d="M3 15c2.5-2.5 4.5-2.5 6 0s3.5 2.5 6 0 4.5-2.5 6 0"></path>
+		<path class="bm-wave bm-faint" d="M3 20c2.5-2.5 4.5-2.5 6 0s3.5 2.5 6 0 4.5-2.5 6 0"></path>
+	</svg>
+}
+
+templ icon(name string) {
+	<svg class="icon" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+		switch name {
+			case "home":
+				<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"></path>
+			case "pr":
+				<circle cx="6" cy="6" r="2.5"></circle>
+				<circle cx="6" cy="18" r="2.5"></circle>
+				<circle cx="18" cy="18" r="2.5"></circle>
+				<path d="M6 8.5v7M18 15.5V9a3 3 0 0 0-3-3h-4"></path>
+			case "lock":
+				<rect x="4.5" y="10.5" width="15" height="10" rx="2"></rect>
+				<path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"></path>
+			case "jobs":
+				<path d="M4 6h16M4 12h10M4 18h6"></path>
+			case "server":
+				<rect x="3" y="4" width="18" height="7" rx="1.5"></rect>
+				<rect x="3" y="13" width="18" height="7" rx="1.5"></rect>
+				<path d="M7 7.5h.01M7 16.5h.01"></path>
+			case "search":
+				<circle cx="11" cy="11" r="7"></circle>
+				<path d="m20 20-4-4"></path>
+			case "moon":
+				<path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"></path>
+			case "db":
+				<ellipse cx="12" cy="6" rx="7" ry="3"></ellipse>
+				<path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"></path>
+		}
+	</svg>
+}
+
+templ pill(t tone, label string) {
+	<span class={ "pill", string(t) }>
+		if t != toneNeutral {
+			<span class="dot"></span>
+		}
+		{ label }
+	</span>
+}
+
+templ statePill(s ProjectState) {
+	@pill(describeState(s).Tone, describeState(s).Label)
+}
+
+templ ledger(c Changes) {
+	if !c.Known {
+		<span class="ledger muted">Not available</span>
+	} else {
+		<span class="ledger" aria-label={ fmt.Sprintf("%d to add, %d to change, %d to destroy", c.Add, c.Change+c.Import+c.Forget, c.Destroy) }>
+			<span class="a">+{ itoa(c.Add) }</span>
+			<span class="c">~{ itoa(c.Change + c.Import + c.Forget) }</span>
+			<span class="d">-{ itoa(c.Destroy) }</span>
+			if c.Total() > 0 {
+				{{ a, ch, d := ledgerWidths(c, 74) }}
+				<svg class="lbar" width="74" height="6" viewBox="0 0 74 6" aria-hidden="true">
+					<rect class="lb-bg" width="74" height="6" rx="3"></rect>
+					<rect class="lb-a" width={ itoa(a) } height="6"></rect>
+					<rect class="lb-c" x={ itoa(a) } width={ itoa(ch) } height="6"></rect>
+					<rect class="lb-d" x={ itoa(a + ch) } width={ itoa(d) } height="6"></rect>
+				</svg>
+			}
+		</span>
+	}
+}
+
+templ projectDots(p PullRequest) {
+	<span class="projdots" aria-label={ fmt.Sprintf("%d projects", len(p.Projects)) }>
+		for _, proj := range p.Projects {
+			<i class={ string(describeState(proj.State).Tone) } title={ projectLabel(proj) + ": " + describeState(proj.State).Label }></i>
+		}
+	</span>
+}
+
+templ pullTable(m meta, pulls []PullRequest) {
+	<div class="scroll">
+		<table class="tbl">
+			<thead>
+				<tr><th>Pull request</th><th>Status</th><th>Projects</th><th>Changes</th><th>Last activity</th></tr>
+			</thead>
+			<tbody>
+				for _, p := range pulls {
+					<tr>
+						<td>
+							<div class="title-cell">
+								<a class="rowlink" href={ templ.SafeURL(pullHref(m.Base, p.Repo.FullName, p.Num)) }>{ p.Repo.FullName } #{ itoa(p.Num) }</a>
+								<small>
+									{ orUnknown(p.Author) }
+									if p.HeadBranch != "" {
+										· <span class="mono">{ p.HeadBranch }</span>
+									}
+								</small>
+							</div>
+						</td>
+						<td>
+							@statePill(pullState(p))
+						</td>
+						<td>
+							@projectDots(p)
+						</td>
+						<td>
+							@ledger(p.Changes())
+						</td>
+						<td class="muted num">{ ago(m.Now, p.LastActivity) }</td>
+					</tr>
+				}
+				if len(pulls) == 0 {
+					<tr><td colspan="5" class="empty">No pull requests match. Atlantis lists a pull request after it plans one.</td></tr>
+				}
+			</tbody>
+		</table>
+	</div>
+}
+
+templ applyBanner(m meta, al ApplyLock) {
+	if !al.Enabled {
+		<div class="banner">
+			@pill(toneNeutral, "Global apply lock off")
+			<p class="grow muted">This server doesn't allow locking every apply at once.</p>
+		</div>
+	} else if al.Locked {
+		<div class="banner locked" role="status">
+			@icon("lock")
+			<div class="grow">
+				<p><b>Applies are locked for every repository.</b></p>
+				<p class="muted">Locked { ago(m.Now, al.Since) }. Plans still run.</p>
+			</div>
+			<form method="post" action={ m.url("/applies/unlock") }>
+				<button class="btn" type="submit">Unlock applies</button>
+			</form>
+		</div>
+	} else {
+		<div class="banner">
+			@pill(toneOK, "Applies open")
+			<p class="grow muted">Anyone allowed to apply can run <span class="mono">atlantis apply</span>.</p>
+			<details class="confirm">
+				<summary class="btn danger">Lock applies…</summary>
+				<form method="post" action={ m.url("/applies/lock") } class="inline-confirm">
+					<span>Every <span class="mono">atlantis apply</span> fails until someone unlocks applies.</span>
+					<button class="btn danger solid" type="submit">Lock applies</button>
+				</form>
+			</details>
+		</div>
+	}
+}
+
+templ capabilityNote(text string) {
+	<p class="capnote">{ text }</p>
+}
+
+// ---------- pages ----------
+
+type overviewData struct {
+	Pulls     []PullRequest
+	Locks     []Lock
+	Running   []Job
+	ApplyLock ApplyLock
+	Attention []attentionItem
+}
+
+templ overviewPage(m meta, d overviewData) {
+	@layout(m) {
+		<div class="head">
+			<div>
+				<h1>Overview</h1>
+				<p>{ itoa(len(d.Pulls)) } pull requests, { itoa(len(d.Locks)) } locks and { itoa(len(d.Running)) } running jobs.</p>
+			</div>
+		</div>
+		@applyBanner(m, d.ApplyLock)
+		@replicaStrip(m)
+		<div class="cols">
+			<section class="panel" aria-labelledby="att-h" id="attention" hx-get={ string(m.url("")) } hx-trigger="every 15s" hx-select="#attention" hx-target="this" hx-swap="outerHTML">
+				<header><h2 id="att-h">Needs attention</h2><span class="muted">{ itoa(len(d.Attention)) } items</span></header>
+				if len(d.Attention) == 0 {
+					<p class="empty">Nothing needs attention. Failed plans, policy failures and abandoned locks show up here.</p>
+				} else {
+					<ul class="att">
+						for _, a := range d.Attention {
+							<li>
+								<span class={ "sev", string(a.Tone) }></span>
+								<div><p>{ a.Title }</p><small>{ a.Detail }</small></div>
+								<a class="btn sm" href={ templ.SafeURL(a.Href) }>{ a.Action }</a>
+							</li>
+						}
+					</ul>
+				}
+			</section>
+			<section class="panel" aria-labelledby="run-h" id="running" hx-get={ string(m.url("")) } hx-trigger="every 5s" hx-select="#running" hx-target="this" hx-swap="outerHTML">
+				<header><h2 id="run-h">Running now</h2><span class="muted">On this replica</span></header>
+				if len(d.Running) == 0 {
+					<p class="empty">No jobs are running on this replica.</p>
+				} else {
+					for _, j := range d.Running {
+						<a class="job" href={ templ.SafeURL(jobHref(m.Base, j.ID)) }>
+							<div><b>{ j.Repo.FullName } #{ itoa(j.PullNum) }</b> <span class="mono muted">{ j.Dir }</span><br/><small class="muted">{ j.Step } · { itoa(j.Lines) } lines · last output { ago(m.Now, j.LastOutput) }</small></div>
+							@pill(toneRun, j.Step)
+						</a>
+					}
+				}
+				if !m.Caps.ClusterJobs {
+					@capabilityNote("Jobs on other replicas aren't listed. Durable storage (ADR 0005) adds a cluster-wide view.")
+				}
+			</section>
+		</div>
+		<section class="panel" aria-labelledby="pr-h">
+			<header><h2 id="pr-h">Pull requests</h2><span class="muted">Most recent activity first</span><span class="right"><a class="btn sm" href={ m.url("/pulls") }>All pull requests</a></span></header>
+			@pullTable(m, firstN(d.Pulls, 8))
+		</section>
+	}
+}
+
+templ replicaStrip(m meta) {
+	<section class="panel" aria-labelledby="rep-h">
+		<header><h2 id="rep-h">This replica</h2><span class="muted">The Atlantis process that served this page</span><span class="right"><a class="btn sm" href={ m.url("/replica") }>Details</a></span></header>
+		<div class="strip">
+			<div class="stat">
+				<span class="muted">State</span>
+				if m.Instance.ShuttingDown {
+					@pill(toneWarn, "Draining")
+				} else {
+					@pill(toneOK, "Serving")
+				}
+			</div>
+			<div class="stat"><span class="muted">Operations in progress</span><b class="num">{ itoa(m.Instance.InProgressOps) }</b></div>
+			<div class="stat">
+				<span class="muted">Lock database</span>
+				if m.Instance.DatabaseOK {
+					@pill(toneOK, m.Instance.LockingBackend)
+				} else {
+					@pill(toneBad, m.Instance.LockingBackend+" unreachable")
+				}
+			</div>
+			<div class="stat"><span class="muted">Version</span><b class="mono">{ m.Instance.Version }</b></div>
+		</div>
+	</section>
+}
+
+type pullsData struct {
+	Pulls  []PullRequest
+	Filter string
+	Total  int
+}
+
+templ pullsPage(m meta, d pullsData) {
+	@layout(m) {
+		<div class="head">
+			<div>
+				<h1>Pull requests</h1>
+				<p>Every open pull request Atlantis has planned.</p>
+			</div>
+			<div class="actions">
+				<nav class="filters" aria-label="Filter by status">
+					for _, f := range pullFilters {
+						<a
+							class="chip"
+							href={ m.url("/pulls" + filterQuery(f.Key)) }
+							if d.Filter == f.Key {
+								aria-current="true"
+							}
+						>{ f.Label }</a>
+					}
+				</nav>
+			</div>
+		</div>
+		<section class="panel" id="pull-list" hx-get={ string(m.url("/pulls" + filterQuery(d.Filter))) } hx-trigger="every 10s" hx-select="#pull-list" hx-target="this" hx-swap="outerHTML">
+			<header><h2>{ itoa(len(d.Pulls)) } of { itoa(d.Total) } pull requests</h2></header>
+			@pullTable(m, d.Pulls)
+		</section>
+	}
+}
+
+templ pullPage(m meta, p PullRequest) {
+	@layout(m) {
+		<div class="prhead">
+			<h1>{ p.Repo.FullName } #{ itoa(p.Num) }</h1>
+			<div class="prmeta">
+				@statePill(pullState(p))
+				<span>By { orUnknown(p.Author) }</span>
+				if p.HeadBranch != "" {
+					<span class="mono">{ p.HeadBranch } → { p.BaseBranch }</span>
+				}
+				if p.HeadCommit != "" {
+					<span class="mono">{ shortSHA(p.HeadCommit) }</span>
+				}
+				@ledger(p.Changes())
+				if p.URL != "" {
+					<a href={ templ.SafeURL(p.URL) } rel="noopener noreferrer" target="_blank">Open pull request</a>
+				}
+			</div>
+		</div>
+		<section class="panel" id="projects" hx-get={ string(templ.SafeURL(pullHref(m.Base, p.Repo.FullName, p.Num))) } hx-trigger="every 5s" hx-select="#projects" hx-target="this" hx-swap="outerHTML">
+			<header><h2>Projects</h2><span class="muted">{ itoa(len(p.Projects)) }</span></header>
+			<div class="scroll">
+				<table class="tbl">
+					<thead><tr><th>Project</th><th>Status</th><th>Changes</th><th>Lock</th><th></th></tr></thead>
+					<tbody>
+						for _, proj := range p.Projects {
+							<tr>
+								<td>
+									<div class="title-cell">
+										<span class="mono">{ proj.Dir }</span>
+										<small>
+											workspace { proj.Workspace }
+											if proj.Name != "" {
+												· { proj.Name }
+											}
+										</small>
+									</div>
+								</td>
+								<td>
+									@statePill(proj.State)
+								</td>
+								<td>
+									@ledger(proj.Changes)
+								</td>
+								<td>
+									if proj.LockID != "" {
+										@unlockControl(m, proj.LockID, string(templ.SafeURL(pullHref(m.Base, p.Repo.FullName, p.Num))))
+									} else {
+										<span class="muted">Not locked</span>
+									}
+								</td>
+								<td class="right-cell">
+									if proj.LatestJobID != "" {
+										<a class="btn sm" href={ templ.SafeURL(jobHref(m.Base, proj.LatestJobID)) }>View log</a>
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+			if !m.Caps.RunHistory {
+				@capabilityNote("Logs are kept in memory on the replica that ran the job, until the pull request closes or the replica restarts.")
+			}
+		</section>
+	}
+}
+
+templ unlockControl(m meta, id string, returnTo string) {
+	<details class="confirm">
+		<summary class="btn sm danger">Unlock…</summary>
+		<form method="post" action={ m.url("/locks/discard") } class="inline-confirm">
+			<input type="hidden" name="id" value={ id }/>
+			<input type="hidden" name="return" value={ returnTo }/>
+			<span>Discards the saved plan and comments on the pull request.</span>
+			<button class="btn sm danger solid" type="submit">Discard plan and unlock</button>
+		</form>
+	</details>
+}
+
+type locksData struct {
+	Locks     []Lock
+	ApplyLock ApplyLock
+}
+
+templ locksPage(m meta, d locksData) {
+	@layout(m) {
+		<div class="head">
+			<div>
+				<h1>Locks</h1>
+				<p>A project lock stops other pull requests from planning the same directory and workspace.</p>
+			</div>
+		</div>
+		@applyBanner(m, d.ApplyLock)
+		<form method="post" action={ m.url("/locks/discard") } class="panel" id="lock-list">
+			<input type="hidden" name="return" value={ string(m.url("/locks")) }/>
+			<header>
+				<h2>{ itoa(len(d.Locks)) } project locks</h2>
+				<span class="muted">{ itoa(countStale(m.Now, d.Locks)) } look abandoned</span>
+				if len(d.Locks) > 0 {
+					<span class="right">
+						<details class="confirm">
+							<summary class="btn sm danger">Unlock selected…</summary>
+							<div class="inline-confirm">
+								<span>Discards the saved plans for the selected projects and comments on their pull requests.</span>
+								<button class="btn sm danger solid" type="submit">Discard plans and unlock</button>
+							</div>
+						</details>
+					</span>
+				}
+			</header>
+			<div class="scroll">
+				<table class="tbl">
+					<thead><tr><th><span class="sr-only">Select</span></th><th>Project</th><th>Held by</th><th>Pull request</th><th>Held for</th></tr></thead>
+					<tbody>
+						for _, l := range d.Locks {
+							<tr>
+								<td><input type="checkbox" class="cb" name="id" value={ l.ID } id={ "sel-" + l.ID } aria-label={ "Select " + l.Dir }/></td>
+								<td>
+									<div class="title-cell">
+										<label class="mono" for={ "sel-" + l.ID }>{ lockLabel(l) }</label>
+										<small>{ l.Repo.FullName } · workspace { l.Workspace }</small>
+									</div>
+								</td>
+								<td>{ orUnknown(l.User) }</td>
+								<td>
+									<a href={ templ.SafeURL(pullHref(m.Base, l.Repo.FullName, l.PullNum)) }>#{ itoa(l.PullNum) }</a>
+									if !l.PullTracked {
+										@pill(toneBad, "Not tracked")
+									}
+								</td>
+								<td class="num">
+									{ held(m.Now, l.Since) }
+									if lockStale(m.Now, l) {
+										@pill(toneWarn, "Stale")
+									}
+								</td>
+							</tr>
+						}
+						if len(d.Locks) == 0 {
+							<tr><td colspan="5" class="empty">No projects are locked. A lock appears when a pull request is planned.</td></tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		</form>
+		@capabilityNote("Locks don't expire. A lock is flagged when its pull request is no longer tracked or it has been held for over 7 days.")
+	}
+}
+
+type jobsData struct {
+	Jobs []Job
+}
+
+templ jobsPage(m meta, d jobsData) {
+	@layout(m) {
+		<div class="head">
+			<div>
+				<h1>Jobs</h1>
+				<p>Plans, applies and policy checks this replica has output for.</p>
+			</div>
+		</div>
+		<section class="panel" id="job-list" hx-get={ string(m.url("/jobs")) } hx-trigger="every 5s" hx-select="#job-list" hx-target="this" hx-swap="outerHTML">
+			<header><h2>{ itoa(len(d.Jobs)) } jobs</h2></header>
+			<div class="scroll">
+				<table class="tbl">
+					<thead><tr><th>Project</th><th>Step</th><th>Status</th><th>Output</th><th>Last output</th></tr></thead>
+					<tbody>
+						for _, j := range d.Jobs {
+							<tr>
+								<td>
+									<div class="title-cell">
+										<a class="rowlink mono" href={ templ.SafeURL(jobHref(m.Base, j.ID)) }>{ jobLabel(j) }</a>
+										<small>{ j.Repo.FullName } #{ itoa(j.PullNum) }</small>
+									</div>
+								</td>
+								<td>{ j.Step }</td>
+								<td>
+									if j.Done {
+										@pill(toneNeutral, "Finished")
+									} else {
+										@pill(toneRun, "Running")
+									}
+								</td>
+								<td class="num">{ itoa(j.Lines) } lines</td>
+								<td class="muted num">{ ago(m.Now, j.LastOutput) }</td>
+							</tr>
+						}
+						if len(d.Jobs) == 0 {
+							<tr><td colspan="5" class="empty">No job output on this replica yet. Jobs appear when a plan or apply starts.</td></tr>
+						}
+					</tbody>
+				</table>
+			</div>
+			if !m.Caps.ClusterJobs {
+				@capabilityNote("Only jobs from this replica are listed, and they're cleared on restart.")
+			}
+		</section>
+	}
+}
+
+templ jobPage(m meta, j Job) {
+	@layout(m) {
+		<div class="prhead">
+			<h1 class="mono">{ jobLabel(j) }</h1>
+			<div class="prmeta">
+				if j.Done {
+					@pill(toneNeutral, "Finished")
+				} else {
+					@pill(toneRun, "Running")
+				}
+				<span>{ j.Step }</span>
+				<a href={ templ.SafeURL(pullHref(m.Base, j.Repo.FullName, j.PullNum)) }>{ j.Repo.FullName } #{ itoa(j.PullNum) }</a>
+				<span>workspace { j.Workspace }</span>
+			</div>
+		</div>
+		<section class="panel">
+			<log-view data-src={ jobHref(m.Base, j.ID) + "/events" }>
+				<div class="termbar">
+					<span class="pill run" data-log-status><span class="dot"></span>Connecting</span>
+					<label class="muted" for="logq">Find in log</label>
+					<input id="logq" type="search" data-log-find placeholder="security_group"/>
+					<label class="follow"><input type="checkbox" class="cb" data-log-follow checked/> Follow output</label>
+					<span class="muted grow-right" data-log-count></span>
+				</div>
+				<div class="term" role="log" aria-live="off" tabindex="0" data-log-lines></div>
+				<noscript><p class="empty">The log viewer needs JavaScript.</p></noscript>
+			</log-view>
+		</section>
+	}
+}
+
+templ replicaPage(m meta, al ApplyLock) {
+	@layout(m) {
+		<div class="head">
+			<div>
+				<h1>This replica</h1>
+				<p>Health of the Atlantis process that served this page.</p>
+			</div>
+		</div>
+		@replicaStrip(m)
+		<div class="cols">
+			<section class="panel">
+				<header><h2>Details</h2></header>
+				<dl class="kv">
+					<dt>Version</dt><dd class="mono">{ m.Instance.Version }</dd>
+					<dt>Started</dt><dd>{ ago(m.Now, m.Instance.StartedAt) }</dd>
+					<dt>Lock database</dt>
+					<dd>
+						{ m.Instance.LockingBackend }
+						if !m.Instance.DatabaseOK {
+							· <span class="bad-text">{ m.Instance.DatabaseError }</span>
+						}
+					</dd>
+					<dt>Global apply lock</dt>
+					<dd>
+						if !al.Enabled {
+							Off on this server
+						} else if al.Locked {
+							Locked { ago(m.Now, al.Since) }
+						} else {
+							Open
+						}
+					</dd>
+					<dt>Experiments</dt>
+					<dd class="mono">{ joinOr(m.Instance.Experiments, "none") }</dd>
+				</dl>
+			</section>
+			<section class="panel">
+				<header><h2>What this page can show</h2></header>
+				<dl class="kv">
+					<dt>Run history</dt><dd>{ capText(m.Caps.RunHistory, "Kept across restarts", "Only in memory, until restart") }</dd>
+					<dt>Other replicas</dt><dd>{ capText(m.Caps.ClusterJobs, "Visible", "Not visible yet") }</dd>
+					<dt>Audit log</dt><dd>{ capText(m.Caps.AuditLog, "Stored", "Server logs only") }</dd>
+				</dl>
+				@capabilityNote("Locks and pull status come from the shared lock database, so every replica shows the same values. Durable storage (ADR 0005) adds history, cluster-wide jobs and the audit log.")
+			</section>
+		</div>
+	}
+}
+
+templ errorPage(m meta, title, message string) {
+	@layout(m) {
+		<div class="head"><div><h1>{ title }</h1><p>{ message }</p></div></div>
+		<p><a class="btn" href={ m.url("") }>Go to the overview</a></p>
+	}
+}

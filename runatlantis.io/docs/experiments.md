@@ -38,8 +38,9 @@ Names are lowercase and match exactly. Unknown names, wildcard values, `all`, an
 | --- | --- | --- | --- | --- | --- | --- |
 | [API](api-endpoints.md#main-endpoints) | `api` | Experimental | Plan/apply: v0.19.8+. Experiment gate: unreleased (Main only). | Requires `api`; authenticated commands also require `api-secret` | [ADR 0002](/contributing/adr/0002-api-enhancement-drift-detection.md) | [API development #6162](https://github.com/runatlantis/atlantis/issues/6162) |
 | [Drift detection](api-endpoints.md#drift-detection-and-remediation-alpha) | `drift-detection` | Experimental | Legacy API: v0.45.0+. Experiment gate: unreleased (Main only). | Requires `drift-detection`, `api-secret`, and drift enable flags | [ADR 0002](/contributing/adr/0002-api-enhancement-drift-detection.md) | [Development #7033](https://github.com/runatlantis/atlantis/issues/7033) |
+| [Web UI](#web-ui) | `web-ui` | Experimental | Unreleased (Main only). | Requires `web-ui` | [ADR 0005](/contributing/adr/0005-use-durable-storage-with-one-data-model.md) data model | [Web UI #6158](https://github.com/runatlantis/atlantis/issues/6158) |
 
-The supported names are `api` and `drift-detection`. Each permits its own route group and does not grant the other permission. No current release tag contains this setting.
+The supported names are `api`, `drift-detection`, and `web-ui`. Each permits its own route group and does not grant the other permission. No current release tag contains this setting.
 
 Both experiments share ADR 0002, but have separate tracking issues and graduation criteria. Graduating either one does not make the other stable.
 
@@ -99,5 +100,23 @@ Results currently use in-memory storage and are lost on restart. Drift detection
 - [ ] Review remediation authorization and execution requirements against the [remediation tests](https://github.com/runatlantis/atlantis/blob/main/server/controllers/api_remediation_executor_internal_test.go).
 - [ ] Verify enable, disable, upgrade, and rollback instructions with the target release.
 - [ ] Record the graduation decision and first stable release in [development tracker #7033](https://github.com/runatlantis/atlantis/issues/7033).
+
+## Web UI
+
+Add `web-ui` to `experiments` to serve a new web UI at `/ui`. The existing UI at `/` is unchanged. The new UI shows pull requests with per-project status and plan changes, project locks with single and bulk unlock, the global apply lock, live job logs, and the health of the replica serving the page.
+
+The UI uses the same access control as the existing UI: [basic auth](server-configuration.md#web-basic-auth) when enabled, and nothing otherwise. Anyone who can reach `/ui` can discard plans and lock applies, so enable basic auth or put Atlantis behind an authenticating proxy. Actions reject cross-origin requests, and pages are served with a Content Security Policy that blocks inline scripts and styles. When basic auth is on, the pull request comment for a discarded plan names the user.
+
+Locks, the apply lock, and pull request status come from the locking database, so every replica shows the same values. Job lists and logs live in memory on the replica that ran the job and are cleared on restart. With several replicas behind a load balancer, a job page may show "no output" when the request reaches a different replica. The pages are built on the [ADR 0005](/contributing/adr/0005-use-durable-storage-with-one-data-model.md) data model so that durable storage can add history, cluster-wide jobs, and an audit log without changing them.
+
+To disable the new UI, remove `web-ui` from `experiments` and restart. Routes under `/ui` then return HTTP 404.
+
+### Web UI graduation checklist
+
+- [x] Serve the UI only with the `web-ui` permission. Evidence: route tests in `server/experiments_test.go`.
+- [ ] Add web sign-in and role-based access for UI actions (tracked separately; requires an ADR).
+- [ ] Serve job history and logs from durable storage when the `durable-storage` experiment is enabled.
+- [ ] Decide whether the new UI replaces the UI at `/`, and document the migration.
+- [ ] Record the graduation decision and first stable release in [web UI tracker #6158](https://github.com/runatlantis/atlantis/issues/6158).
 
 See the [feature lifecycle ADR](/contributing/adr/0004-govern-feature-lifecycles.md) for the lifecycle policy and graduation requirements.
