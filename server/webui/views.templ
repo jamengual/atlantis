@@ -541,9 +541,12 @@ templ pullPage(m meta, p PullRequest) {
 									}
 								</td>
 								<td class="right-cell">
-									if proj.LatestJobID != "" {
-										<a class="btn sm" href={ templ.SafeURL(jobHref(m.Base, proj.LatestJobID)) }>View log</a>
-									}
+									<span class="rowbtns">
+										<a class="btn sm" href={ templ.SafeURL(planHref(m.Base, p.Repo, p.Num, proj.Ref())) } aria-label={ "Plan for " + projectLabel(proj) }>Plan</a>
+										if proj.LatestJobID != "" {
+											<a class="btn sm" href={ templ.SafeURL(jobHref(m.Base, proj.LatestJobID)) }>View log</a>
+										}
+									</span>
 								</td>
 							</tr>
 						}
@@ -554,6 +557,193 @@ templ pullPage(m meta, p PullRequest) {
 				@capabilityNote("Logs are kept in memory on the replica that ran the job, until the pull request closes or the replica restarts.")
 			}
 		</section>
+	}
+}
+
+type planData struct {
+	Pull    PullRequest
+	Project Project
+	Plan    ProjectPlan
+	Groups  []planGroup
+}
+
+templ planPage(m meta, d planData) {
+	@layout(m) {
+		<div class="prhead">
+			<h1 class="mono">{ projectLabel(d.Project) }</h1>
+			<div class="prmeta">
+				@statePill(d.Project.State)
+				<a href={ templ.SafeURL(pullHref(m.Base, d.Pull.Repo, d.Pull.Num)) }>{ d.Pull.Repo.FullName } #{ itoa(d.Pull.Num) }</a>
+				<span class="mono">{ d.Project.Dir }</span>
+				<span>workspace { d.Project.Workspace }</span>
+				if d.Plan.Status == PlanReady {
+					@ledger(d.Plan.Plan.Changes)
+					<span>Planned { ago(m.Now, d.Plan.GeneratedAt) }</span>
+					if d.Plan.Plan.TerraformVersion != "" {
+						<span>Terraform { d.Plan.Plan.TerraformVersion }</span>
+					}
+				}
+				if d.Project.LatestJobID != "" {
+					<a href={ templ.SafeURL(jobHref(m.Base, d.Project.LatestJobID)) }>View log</a>
+				}
+			</div>
+		</div>
+		if d.Plan.Status != PlanReady {
+			{{ title, body := planMessage(d.Plan, d.Project.State) }}
+			<section class="panel" id="plan-unavailable">
+				<header><h2>{ title }</h2></header>
+				<p class="empty">{ body }</p>
+				if d.Plan.Status == PlanNoJSON {
+					<pre class="snippet mono">{ "workflows:\n  default:\n    plan:\n      steps: [init, plan, show]" }</pre>
+				}
+				@planCapNote(m)
+			</section>
+		} else {
+			@planSummary(d.Plan.Plan.Changes)
+			<section class="panel" id="plan" aria-labelledby="plan-h">
+				<header>
+					<h2 id="plan-h">Resource changes</h2>
+					<span class="muted">{ itoa(d.Plan.Plan.TotalResources) }</span>
+					if d.Plan.Plan.TotalResources > 0 {
+						<span class="right">
+							<nav class="filters" aria-label="Filter resources by action" data-plan-filters hidden>
+								for _, f := range planFilters(d.Groups) {
+									<button
+										type="button"
+										class="chip"
+										data-plan-filter={ f.Key }
+										if f.Key == "all" {
+											aria-pressed="true"
+										} else {
+											aria-pressed="false"
+										}
+									>{ f.Label } <span class="num">{ itoa(f.Count) }</span></button>
+								}
+							</nav>
+							<button type="button" class="btn sm" data-plan-expand hidden>Expand all</button>
+						</span>
+					}
+				</header>
+				if d.Plan.Plan.TotalResources == 0 {
+					<p class="empty">This plan changes no resources.</p>
+				}
+				for _, g := range d.Groups {
+					<section class="plan-group" data-plan-group={ g.Filter } aria-label={ g.Label }>
+						<h3><span class={ "sym", g.Class } aria-hidden="true">{ g.Symbol }</span> { g.Label } <span class="muted num">{ itoa(len(g.Resources)) }</span></h3>
+						for _, r := range g.Resources {
+							@planResource(g, r, d.Plan.Plan.TotalResources <= 8)
+						}
+					</section>
+				}
+				if d.Plan.Plan.TotalResources > len(d.Plan.Plan.Resources) {
+					<p class="capnote">Showing the first { itoa(len(d.Plan.Plan.Resources)) } of { itoa(d.Plan.Plan.TotalResources) } resource changes. The counts above cover the whole plan; read the rest in the job log.</p>
+				}
+				if d.Plan.Plan.AttributesOmitted {
+					<p class="capnote">Some attribute details were left out to keep this page small.</p>
+				}
+				<p class="capnote">Values Terraform marks as sensitive are hidden. Other values appear as they do in the plan output.</p>
+				@planCapNote(m)
+			</section>
+		}
+	}
+}
+
+templ planCapNote(m meta) {
+	if !m.Caps.SharedPlans {
+		@capabilityNote("Plan details are read from the working directory of the replica that ran the plan. Other replicas can't show them, and they're gone once the plan is applied or the pull request closes.")
+	}
+}
+
+templ planSummary(c Changes) {
+	<div class="panel plan-sum" aria-label="Plan summary">
+		<div class="stat"><span class="muted">To add</span><b class="a">+{ itoa(c.Add) }</b></div>
+		<div class="stat"><span class="muted">To change</span><b class="c">~{ itoa(c.Change) }</b></div>
+		<div class="stat"><span class="muted">To destroy</span><b class="d">-{ itoa(c.Destroy) }</b></div>
+		if c.Import > 0 {
+			<div class="stat"><span class="muted">To import</span><b>{ itoa(c.Import) }</b></div>
+		}
+		if c.Forget > 0 {
+			<div class="stat"><span class="muted">To remove from state</span><b>{ itoa(c.Forget) }</b></div>
+		}
+	</div>
+}
+
+templ planResource(g planGroup, r ResourceChange, open bool) {
+	<details class="res" open?={ open }>
+		<summary>
+			<span class={ "sym", g.Class } aria-hidden="true">{ g.Symbol }</span>
+			<span class="addr mono">{ r.Address }</span>
+			<span class="tags">
+				if r.Importing {
+					<span class="pill run">Import { r.ImportID }</span>
+				}
+				if r.PreviousAddress != "" {
+					<span class="pill">Moved from { r.PreviousAddress }</span>
+				}
+				if r.Deposed != "" {
+					<span class="pill warn">Deposed object { r.Deposed }</span>
+				}
+			</span>
+		</summary>
+		<div class="res-body">
+			<p class="muted res-meta">
+				{ actionSentence(r) }
+				if r.Provider != "" {
+					<span class="mono">{ r.Provider }</span>
+				}
+			</p>
+			if len(r.Attributes) == 0 && r.Omitted == 0 {
+				<p class="muted res-meta">No attribute changes.</p>
+			}
+			if len(r.Attributes) > 0 {
+				<ul class="attrs">
+					for _, a := range r.Attributes {
+						<li>
+							<div class="path mono">
+								{ a.Path }
+								if a.ForcesReplacement {
+									<span class="pill warn">Forces replacement</span>
+								}
+							</div>
+							<div class="vals mono">
+								if !a.BeforeAbsent {
+									<span class="old">
+										@planValue(a.Before, a.BeforeSensitive, false)
+									</span>
+								}
+								if !a.BeforeAbsent && !a.AfterAbsent {
+									<span class="arrow" aria-label="becomes">→</span>
+								}
+								if !a.AfterAbsent {
+									<span class="new">
+										@planValue(a.After, a.AfterSensitive, a.AfterUnknown)
+									</span>
+								} else if g.Action != PlanDelete && g.Action != PlanForget {
+									<span class="arrow" aria-label="becomes">→</span>
+									<span class="new"><span class="muted">null</span></span>
+								}
+							</div>
+						</li>
+					}
+				</ul>
+			}
+			if r.Omitted > 0 {
+				<p class="muted res-meta">{ itoa(r.Omitted) } more changed { plural(r.Omitted, "attribute", "attributes") } not shown.</p>
+			}
+			if r.Unchanged > 0 {
+				<p class="muted res-meta">{ itoa(r.Unchanged) } unchanged { plural(r.Unchanged, "attribute", "attributes") } hidden.</p>
+			}
+		</div>
+	</details>
+}
+
+templ planValue(v string, sensitive, unknown bool) {
+	if unknown {
+		<em class="unk">(known after apply)</em>
+	} else if sensitive {
+		<span class="sens">(sensitive value)</span>
+	} else {
+		{ v }
 	}
 }
 

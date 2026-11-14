@@ -30,6 +30,7 @@ type fakeStore struct {
 	apply    webui.ApplyLock
 	logs     map[string][]string
 	liveLogs map[string]chan webui.LogLine
+	plans    map[webui.ProjectRef]*webui.ProjectPlan
 	err      error
 }
 
@@ -42,6 +43,21 @@ func (f *fakeStore) GetPull(_ context.Context, repo webui.Repository, num int) (
 	for i := range f.pulls {
 		if f.pulls[i].Repo.FullName == repo.FullName && f.pulls[i].Num == num && (repo.VCSHost == "" || repo.VCSHost == f.pulls[i].Repo.VCSHost) {
 			return &f.pulls[i], nil
+		}
+	}
+	return nil, f.err
+}
+func (f *fakeStore) GetPlan(ctx context.Context, repo webui.Repository, num int, ref webui.ProjectRef) (*webui.ProjectPlan, error) {
+	p, err := f.GetPull(ctx, repo, num)
+	if p == nil {
+		return nil, err
+	}
+	for _, proj := range p.Projects {
+		if proj.Ref() == ref {
+			if plan, ok := f.plans[ref]; ok {
+				return plan, f.err
+			}
+			return &webui.ProjectPlan{Status: webui.PlanNoJSON}, f.err
 		}
 	}
 	return nil, f.err

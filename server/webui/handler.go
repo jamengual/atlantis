@@ -131,6 +131,7 @@ func (h *Handler) Register(r *mux.Router) {
 	ui.Handle("/", view(h.overview)).Methods(http.MethodGet)
 	ui.Handle("/pulls", view(h.pulls)).Methods(http.MethodGet)
 	ui.Handle("/repos/{repo:.+}/pulls/{num:[0-9]+}", view(h.pull)).Methods(http.MethodGet)
+	ui.Handle("/repos/{repo:.+}/pulls/{num:[0-9]+}/plan", view(h.plan)).Methods(http.MethodGet)
 	ui.Handle("/locks", view(h.locks)).Methods(http.MethodGet)
 	ui.Handle("/jobs", view(h.jobs)).Methods(http.MethodGet)
 	ui.Handle("/jobs/{id}", view(h.job)).Methods(http.MethodGet)
@@ -380,6 +381,54 @@ func (h *Handler) pull(w http.ResponseWriter, r *http.Request) {
 	}
 	m := h.meta(r, fmt.Sprintf("%s #%d", p.Repo.FullName, p.Num), "pulls", pullsCrumb, crumb{Label: fmt.Sprintf("%s #%d", p.Repo.FullName, p.Num)})
 	h.render(w, r, http.StatusOK, pullPage(m, *p))
+}
+
+// plan shows the resource changes in one project's plan. The project is
+// chosen by dir, workspace and project query parameters, and must be a
+// project Atlantis tracks for the pull request.
+func (h *Handler) plan(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	vars := mux.Vars(r)
+	num, _ := strconv.Atoi(vars["num"])
+	repo := vars["repo"]
+	q := r.URL.Query()
+	ref := ProjectRef{Dir: q.Get("dir"), Workspace: q.Get("workspace"), Name: q.Get("project")}
+	p, err := h.Store.GetPull(ctx, Repository{VCSHost: q.Get("host"), FullName: repo}, num)
+	if err != nil {
+		h.fail(w, r, "the pull request", err)
+		return
+	}
+	pullsCrumb := crumb{Label: "Pull requests", Href: h.BasePath + "/ui/pulls"}
+	if p == nil {
+		m := h.meta(r, "Pull request not found", "pulls", pullsCrumb, crumb{Label: fmt.Sprintf("%s #%d", repo, num)})
+		h.render(w, r, http.StatusNotFound, errorPage(m, "Atlantis has nothing for this pull request",
+			"It may not have been planned yet, or it was closed and cleaned up."))
+		return
+	}
+	pullCrumb := crumb{Label: fmt.Sprintf("%s #%d", p.Repo.FullName, p.Num), Href: pullHref(h.BasePath, p.Repo, p.Num)}
+	var proj *Project
+	for i := range p.Projects {
+		if p.Projects[i].Ref() == ref {
+			proj = &p.Projects[i]
+		}
+	}
+	var plan *ProjectPlan
+	if proj != nil {
+		plan, err = h.Store.GetPlan(ctx, p.Repo, p.Num, ref)
+		if err != nil {
+			h.fail(w, r, "the plan", err)
+			return
+		}
+	}
+	if plan == nil {
+		m := h.meta(r, "Project not found", "pulls", pullsCrumb, pullCrumb, crumb{Label: "Plan"})
+		h.render(w, r, http.StatusNotFound, errorPage(m, "Atlantis has no such project in this pull request",
+			"The project may have been renamed or removed from the pull request. Open the pull request to see its projects."))
+		return
+	}
+	label := projectLabel(*proj)
+	m := h.meta(r, "Plan for "+label, "pulls", pullsCrumb, pullCrumb, crumb{Label: "Plan for " + label})
+	h.render(w, r, http.StatusOK, planPage(m, planData{Pull: *p, Project: *proj, Plan: *plan, Groups: planGroups(plan.Plan)}))
 }
 
 func (h *Handler) locks(w http.ResponseWriter, r *http.Request) {

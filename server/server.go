@@ -1184,6 +1184,8 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 				LockingBackend: userConfig.LockingDBType,
 				StartedAt:      time.Now(),
 				Experiments:    slices.Clone(userConfig.Experiments),
+				WorkingDir:     workingDir,
+				SharePlanDir:   userConfig.SharePlanDir,
 			},
 			Actions: &webui.LegacyActions{
 				Discarder:   locksController,

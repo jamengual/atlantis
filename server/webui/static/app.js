@@ -271,3 +271,40 @@ class LogView extends HTMLElement {
 }
 
 if (!customElements.get("log-view")) customElements.define("log-view", LogView);
+
+// ---------- plan view ----------
+// Filter chips and the expand button work without a page load. Without
+// JavaScript they stay hidden and every resource is listed.
+function setupPlanView() {
+  const filters = document.querySelector("[data-plan-filters]");
+  if (!filters || filters.dataset.ready) return;
+  filters.dataset.ready = "1";
+  filters.hidden = false;
+  const expand = document.querySelector("[data-plan-expand]");
+  const visibleResources = () => [...document.querySelectorAll("[data-plan-group]:not([hidden]) details.res")];
+  const syncExpand = () => {
+    if (!expand) return;
+    const shown = visibleResources();
+    expand.textContent = shown.length && shown.every((d) => d.open) ? "Collapse all" : "Expand all";
+  };
+  filters.addEventListener("click", (e) => {
+    const chip = e.target.closest("[data-plan-filter]");
+    if (!chip) return;
+    const key = chip.dataset.planFilter;
+    filters.querySelectorAll("[data-plan-filter]").forEach((c) => c.setAttribute("aria-pressed", String(c === chip)));
+    document.querySelectorAll("[data-plan-group]").forEach((g) => { g.hidden = key !== "all" && g.dataset.planGroup !== key; });
+    syncExpand();
+  });
+  if (expand) {
+    expand.hidden = false;
+    expand.addEventListener("click", () => {
+      const shown = visibleResources();
+      const open = !shown.every((d) => d.open);
+      shown.forEach((d) => { d.open = open; });
+      syncExpand();
+    });
+    document.addEventListener("toggle", (e) => { if (e.target.matches?.("details.res")) syncExpand(); }, true);
+    syncExpand();
+  }
+}
+setupPlanView();
