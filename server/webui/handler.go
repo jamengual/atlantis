@@ -653,7 +653,11 @@ func (h *Handler) finishLogin(w http.ResponseWriter, r *http.Request) {
 	target, _, err := h.Auth.FinishLogin(w, r, mux.Vars(r)["provider"])
 	if err != nil {
 		h.Logger.Warn("web sign-in failed provider=%q: %s", mux.Vars(r)["provider"], err)
-		h.renderSignIn(w, r, http.StatusForbidden, "", "Sign-in failed: "+err.Error(), "")
+		msg := "Sign-in failed: " + err.Error()
+		if errors.Is(err, webauth.ErrNoRole) {
+			msg = "Your account signed in, but it has no Atlantis role. Ask an administrator to add you to a group that has access."
+		}
+		h.renderSignIn(w, r, http.StatusForbidden, "", msg, "")
 		return
 	}
 	http.Redirect(w, r, target, http.StatusSeeOther) // #nosec G710 -- FinishLogin returns a SafeReturn path
