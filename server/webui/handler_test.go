@@ -227,7 +227,7 @@ func TestPages_EscapeUserContent(t *testing.T) {
 func TestPages_BasePath(t *testing.T) {
 	srv := newServer(t, sampleStore(), &fakeActions{}, "/atlantis")
 	_, body := get(t, srv, "/ui/pulls")
-	assertContains(t, body, `href="/atlantis/ui/repos/acme/infra/pulls/1482?host=github.com"`, `/atlantis/ui/static/app.css?v=`, `src="/atlantis/static/images/atlantis-icon_512.png"`)
+	assertContains(t, body, `href="/atlantis/ui/repos/acme/infra/pulls/1482?host=github.com"`, `/atlantis/ui/static/app.css?v=`, `src="/atlantis/ui/static/atlantis-icon.png?v=`, `href="/atlantis/ui/static/favicon.png?v=`)
 }
 
 func TestPages_NotFound(t *testing.T) {
@@ -251,7 +251,7 @@ func TestPages_StoreErrorShowsRecovery(t *testing.T) {
 
 func TestStatic_Served(t *testing.T) {
 	srv := newServer(t, sampleStore(), &fakeActions{}, "")
-	for _, name := range []string{"app.css", "app.js", "htmx.min.js"} {
+	for _, name := range []string{"app.css", "app.js", "htmx.min.js", "atlantis-icon.png", "favicon.png"} {
 		resp, _ := get(t, srv, "/ui/static/"+name)
 		Equals(t, http.StatusOK, resp.StatusCode)
 	}
