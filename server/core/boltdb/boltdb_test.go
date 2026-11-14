@@ -1504,3 +1504,42 @@ func TestPullStatus_PlanHashPreservedAcrossLaterResults(t *testing.T) {
 	Equals(t, replanHash, status.Projects[0].PlanHash)
 	b.Close()
 }
+
+func TestListPullStatuses(t *testing.T) {
+	db := newTestDB2(t)
+
+	statuses, err := db.ListPullStatuses()
+	Ok(t, err)
+	Equals(t, 0, len(statuses))
+
+	pull := func(repo string, num int) models.PullRequest {
+		return models.PullRequest{
+			Num: num,
+			BaseRepo: models.Repo{
+				FullName: repo,
+				VCSHost:  models.VCSHost{Hostname: "github.com", Type: models.Github},
+			},
+		}
+	}
+	result := []command.ProjectResult{{Command: command.Plan, RepoRelDir: ".", Workspace: "default", ProjectCommandOutput: command.ProjectCommandOutput{Failure: "failure"}}}
+	_, err = db.UpdatePullWithResults(pull("owner/a", 1), result)
+	Ok(t, err)
+	_, err = db.UpdatePullWithResults(pull("owner/b", 2), result)
+	Ok(t, err)
+
+	statuses, err = db.ListPullStatuses()
+	Ok(t, err)
+	Equals(t, 2, len(statuses))
+	nums := map[int]string{}
+	for _, s := range statuses {
+		nums[s.Pull.Num] = s.Pull.BaseRepo.FullName
+		Equals(t, 1, len(s.Projects))
+	}
+	Equals(t, map[int]string{1: "owner/a", 2: "owner/b"}, nums)
+
+	Ok(t, db.DeletePullStatus(pull("owner/a", 1)))
+	statuses, err = db.ListPullStatuses()
+	Ok(t, err)
+	Equals(t, 1, len(statuses))
+	Equals(t, 2, statuses[0].Pull.Num)
+}
