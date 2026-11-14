@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/runatlantis/atlantis/server/controllers/web_templates"
 
@@ -152,7 +153,7 @@ func (l *LocksController) DiscardLock(id string, actor string) (*models.ProjectL
 	}
 
 	via := "via the Atlantis UI"
-	if actor != "" {
+	if actor = commentSafe(actor); actor != "" {
 		via = fmt.Sprintf("via the Atlantis UI by `%s`", actor)
 	}
 	comment := fmt.Sprintf("**Warning**: The plan for dir: `%s` workspace: `%s` was **discarded** %s.\n\n"+
@@ -161,6 +162,12 @@ func (l *LocksController) DiscardLock(id string, actor string) (*models.ProjectL
 		l.Logger.Warn("failed commenting on pull request: %s", err)
 	}
 	return lock, nil
+}
+
+// commentSafe keeps a user name from breaking out of an inline code span or
+// adding lines to a markdown comment.
+func commentSafe(s string) string {
+	return strings.TrimSpace(strings.NewReplacer("`", "", "\n", " ", "\r", " ").Replace(s))
 }
 
 // respond is a helper function to respond and log the response. lvl is the log
