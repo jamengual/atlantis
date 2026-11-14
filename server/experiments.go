@@ -44,6 +44,9 @@ func (c UserConfig) ValidateExperiments() error {
 	if c.APISecret != "" && !api && !drift {
 		return fmt.Errorf("api-secret requires the %q experiment for command/lock endpoints or %q for drift endpoints; add the matching name to experiments or remove api-secret; see %s", apiExperiment, driftExperiment, ExperimentsDocumentationURL)
 	}
+	if c.webSignInConfigured() && !slices.Contains(c.Experiments, webUIExperiment) {
+		return fmt.Errorf("web UI sign-in (web-sso-providers or web-proxy-auth) requires the %q experiment; add it to experiments or remove the sign-in settings; see %s", webUIExperiment, ExperimentsDocumentationURL)
+	}
 	if c.EnableDriftRemediation && !c.EnableDriftDetection {
 		return fmt.Errorf("--enable-drift-remediation requires --enable-drift-detection; see %s", ExperimentsDocumentationURL)
 	}

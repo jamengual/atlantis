@@ -315,3 +315,17 @@ func capText(ok bool, yes, no string) string {
 	}
 	return no
 }
+
+func urlQueryEscape(s string) string { return url.QueryEscape(s) }
+
+func providerMark(id string) string {
+	switch id {
+	case "github":
+		return "GH"
+	case "oidc":
+		return "ID"
+	case "google":
+		return "G"
+	}
+	return "?"
+}

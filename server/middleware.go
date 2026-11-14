@@ -17,10 +17,11 @@ import (
 // NewRequestLogger creates a RequestLogger.
 func NewRequestLogger(s *Server) *RequestLogger {
 	return &RequestLogger{
-		s.Logger,
-		s.WebAuthentication,
-		s.WebUsername,
-		s.WebPassword,
+		logger:            s.Logger,
+		WebAuthentication: s.WebAuthentication,
+		WebUsername:       s.WebUsername,
+		WebPassword:       s.WebPassword,
+		webUISignIn:       s.WebUI != nil && s.WebUI.Auth != nil,
 	}
 }
 
@@ -31,6 +32,9 @@ type RequestLogger struct {
 	WebAuthentication bool
 	WebUsername       string
 	WebPassword       string
+	// webUISignIn is true when the web UI at /ui authenticates its own
+	// users, so basic auth is not applied there.
+	webUISignIn bool
 }
 
 // ServeHTTP implements the middleware function. It logs all requests at DEBUG level.
@@ -42,7 +46,8 @@ func (l *RequestLogger) ServeHTTP(rw http.ResponseWriter, r *http.Request, next 
 		r.URL.Path == "/healthz" ||
 		r.URL.Path == "/readyz" ||
 		r.URL.Path == "/status" ||
-		strings.HasPrefix(r.URL.Path, "/api/") {
+		strings.HasPrefix(r.URL.Path, "/api/") ||
+		(l.webUISignIn && (r.URL.Path == "/ui" || strings.HasPrefix(r.URL.Path, "/ui/"))) {
 		allowed = true
 	} else {
 		user, pass, ok := r.BasicAuth()

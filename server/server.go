@@ -1159,6 +1159,10 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 
 	var webUIHandler *webui.Handler
 	if slices.Contains(userConfig.Experiments, webUIExperiment) {
+		webAuth, err := newWebAuth(userConfig, parsedURL, logger)
+		if err != nil {
+			return nil, err
+		}
 		webUIHandler = &webui.Handler{
 			Store: &webui.LegacyStore{
 				Locks:          lockingClient,
@@ -1177,6 +1181,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 			},
 			BasePath: strings.TrimRight(parsedURL.Path, "/"),
 			Logger:   logger,
+			Auth:     webAuth,
 		}
 	}
 

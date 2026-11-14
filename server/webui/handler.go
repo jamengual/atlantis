@@ -5,6 +5,7 @@ package webui
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
@@ -21,6 +22,7 @@ import (
 	"github.com/a-h/templ"
 	"github.com/gorilla/mux"
 	"github.com/runatlantis/atlantis/server/logging"
+	"github.com/runatlantis/atlantis/server/webauth"
 )
 
 //go:generate go tool templ generate -path .
@@ -65,6 +67,10 @@ type Handler struct {
 	HeartbeatInterval time.Duration
 	// WriteTimeout bounds each write to a log stream. Defaults to 30s.
 	WriteTimeout time.Duration
+	// Auth signs users in and assigns roles. When nil, the UI relies on the
+	// server's basic auth, or none, and everyone who reaches it is an admin,
+	// as with the existing UI.
+	Auth *webauth.Manager
 }
 
 // Register adds the UI routes to r. Mutating routes reject cross-origin
@@ -76,20 +82,79 @@ func (h *Handler) Register(r *mux.Router) {
 	static, _ := fs.Sub(staticFiles, "static")
 	ui.PathPrefix("/static/").Handler(http.StripPrefix("/ui/static/", cacheStatic(http.FileServer(http.FS(static)))))
 
-	ui.HandleFunc("", h.overview).Methods(http.MethodGet)
-	ui.HandleFunc("/", h.overview).Methods(http.MethodGet)
-	ui.HandleFunc("/pulls", h.pulls).Methods(http.MethodGet)
-	ui.HandleFunc("/repos/{repo:.+}/pulls/{num:[0-9]+}", h.pull).Methods(http.MethodGet)
-	ui.HandleFunc("/locks", h.locks).Methods(http.MethodGet)
-	ui.HandleFunc("/jobs", h.jobs).Methods(http.MethodGet)
-	ui.HandleFunc("/jobs/{id}", h.job).Methods(http.MethodGet)
-	ui.HandleFunc("/jobs/{id}/events", h.jobEvents).Methods(http.MethodGet)
-	ui.HandleFunc("/replica", h.replica).Methods(http.MethodGet)
-
 	csrf := http.NewCrossOriginProtection()
-	ui.Handle("/locks/discard", csrf.Handler(http.HandlerFunc(h.discardLocks))).Methods(http.MethodPost)
-	ui.Handle("/applies/lock", csrf.Handler(http.HandlerFunc(h.lockApplies))).Methods(http.MethodPost)
-	ui.Handle("/applies/unlock", csrf.Handler(http.HandlerFunc(h.unlockApplies))).Methods(http.MethodPost)
+
+	// Sign-in routes are reachable without a session.
+	if h.signInPages() {
+		ui.HandleFunc("/login", h.loginPage).Methods(http.MethodGet)
+		ui.HandleFunc("/login/{provider}", h.startLogin).Methods(http.MethodGet)
+		ui.HandleFunc("/auth/callback/{provider}", h.finishLogin).Methods(http.MethodGet)
+		ui.Handle("/logout", csrf.Handler(http.HandlerFunc(h.logout))).Methods(http.MethodPost)
+	}
+
+	view := func(f http.HandlerFunc) http.Handler { return h.guard(webauth.RoleViewer, f) }
+	ui.Handle("", view(h.overview)).Methods(http.MethodGet)
+	ui.Handle("/", view(h.overview)).Methods(http.MethodGet)
+	ui.Handle("/pulls", view(h.pulls)).Methods(http.MethodGet)
+	ui.Handle("/repos/{repo:.+}/pulls/{num:[0-9]+}", view(h.pull)).Methods(http.MethodGet)
+	ui.Handle("/locks", view(h.locks)).Methods(http.MethodGet)
+	ui.Handle("/jobs", view(h.jobs)).Methods(http.MethodGet)
+	ui.Handle("/jobs/{id}", view(h.job)).Methods(http.MethodGet)
+	ui.Handle("/jobs/{id}/events", view(h.jobEvents)).Methods(http.MethodGet)
+	ui.Handle("/replica", view(h.replica)).Methods(http.MethodGet)
+
+	ui.Handle("/locks/discard", csrf.Handler(h.guard(webauth.RoleOperator, h.discardLocks))).Methods(http.MethodPost)
+	ui.Handle("/applies/lock", csrf.Handler(h.guard(webauth.RoleAdmin, h.lockApplies))).Methods(http.MethodPost)
+	ui.Handle("/applies/unlock", csrf.Handler(h.guard(webauth.RoleAdmin, h.unlockApplies))).Methods(http.MethodPost)
+}
+
+// signInPages reports whether users sign in on Atlantis's own pages, as
+// opposed to through an authenticating proxy or not at all.
+func (h *Handler) signInPages() bool {
+	return h.Auth != nil && !h.Auth.UsesProxy()
+}
+
+// guard requires a signed-in principal with at least the given role.
+func (h *Handler) guard(role webauth.Role, f http.HandlerFunc) http.Handler {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := webauth.FromContext(r.Context())
+		if !p.Can(role) {
+			h.forbidden(w, r, p, role)
+			return
+		}
+		f(w, r)
+	})
+	if h.Auth != nil {
+		return h.Auth.Middleware(inner)
+	}
+	return withoutSignIn(inner)
+}
+
+// withoutSignIn keeps the existing UI's access model when web sign-in is
+// off: the basic-auth user, already checked by the server middleware, or an
+// anonymous visitor when basic auth is off, has full access.
+func withoutSignIn(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := &webauth.Principal{Provider: "none", Role: webauth.RoleAdmin}
+		if u, _, ok := r.BasicAuth(); ok {
+			p.Subject, p.Name, p.Provider = u, u, "basic"
+		}
+		next.ServeHTTP(w, r.WithContext(webauth.WithPrincipal(r.Context(), p)))
+	})
+}
+
+func (h *Handler) forbidden(w http.ResponseWriter, r *http.Request, p *webauth.Principal, need webauth.Role) {
+	msg := fmt.Sprintf("This needs the %s role. You're signed in as %s with the %s role. Ask an administrator for access.", need, orUnknown(p.DisplayName()), p.Role)
+	if p.Role == webauth.RoleNone {
+		msg = fmt.Sprintf("You're signed in as %s, but your account has no Atlantis role. Ask an administrator to add you to a group that has access.", orUnknown(p.DisplayName()))
+	}
+	h.Logger.Info("web ui denied path=%q subject=%q provider=%q role=%q need=%q", r.URL.Path, p.Subject, p.Provider, p.Role, need)
+	if r.Method != http.MethodGet || p.Role == webauth.RoleNone {
+		http.Error(w, msg, http.StatusForbidden)
+		return
+	}
+	m := h.meta(r, "Not allowed", "")
+	h.render(w, r, http.StatusForbidden, errorPage(m, "You don't have access to this", msg))
 }
 
 func securityHeaders(next http.Handler) http.Handler {
@@ -121,13 +186,18 @@ func (h *Handler) now() time.Time {
 	return time.Now()
 }
 
-// actor returns who is making the request. Until web sign-in lands this is
-// the basic-auth user, if any.
+// actor returns who is making the request, for PR comments and logs.
 func actor(r *http.Request) string {
-	if u, _, ok := r.BasicAuth(); ok {
-		return u
+	return webauth.FromContext(r.Context()).DisplayName()
+}
+
+// auditFields describes the principal in a log line.
+func auditFields(r *http.Request) string {
+	p := webauth.FromContext(r.Context())
+	if p == nil {
+		return `actor=""`
 	}
-	return ""
+	return fmt.Sprintf("actor=%q subject=%q provider=%q role=%q", p.DisplayName(), p.Subject, p.Provider, p.Role)
 }
 
 // loaded carries lists a page already read, so meta doesn't read them again.
@@ -145,14 +215,15 @@ func (h *Handler) meta(r *http.Request, title, nav string, crumbs ...crumb) meta
 func (h *Handler) metaWith(r *http.Request, l loaded, title, nav string, crumbs ...crumb) meta {
 	ctx := r.Context()
 	m := meta{
-		Title:    title,
-		Nav:      nav,
-		Base:     h.BasePath,
-		Now:      h.now(),
-		Instance: h.Store.Instance(ctx),
-		Caps:     h.Store.Capabilities(),
-		Actor:    actor(r),
-		Flash:    flashMessage(r.URL.Query()),
+		Title:     title,
+		Nav:       nav,
+		Base:      h.BasePath,
+		Now:       h.now(),
+		Instance:  h.Store.Instance(ctx),
+		Caps:      h.Store.Capabilities(),
+		Principal: webauth.FromContext(ctx),
+		SignOut:   h.signInPages(),
+		Flash:     flashMessage(r.URL.Query()),
 	}
 	m.Crumbs = append([]crumb{{Label: "Atlantis", Href: string(m.url(""))}}, crumbs...)
 	if l.have.pulls {
@@ -402,7 +473,7 @@ func (h *Handler) discardLocks(w http.ResponseWriter, r *http.Request) {
 		}
 		if ok {
 			unlocked++
-			h.Logger.Info("web ui discarded lock %q actor=%q", id, who)
+			h.Logger.Info("web ui discarded lock %q %s", id, auditFields(r))
 		} else {
 			missing++
 		}
@@ -416,7 +487,7 @@ func (h *Handler) lockApplies(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Locking applies failed: %s. Check the lock database, then try again.", err), http.StatusInternalServerError)
 		return
 	}
-	h.Logger.Info("web ui locked applies actor=%q", actor(r))
+	h.Logger.Info("web ui locked applies %s", auditFields(r))
 	h.redirectBack(w, r, "/locks", url.Values{"done": {"applies-locked"}})
 }
 
@@ -426,7 +497,7 @@ func (h *Handler) unlockApplies(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Unlocking applies failed: %s. Check the lock database, then try again.", err), http.StatusInternalServerError)
 		return
 	}
-	h.Logger.Info("web ui unlocked applies actor=%q", actor(r))
+	h.Logger.Info("web ui unlocked applies %s", auditFields(r))
 	h.redirectBack(w, r, "/locks", url.Values{"done": {"applies-unlocked"}})
 }
 
@@ -536,4 +607,87 @@ func formatEvent(line LogLine) string {
 	}
 	b.WriteString("\n")
 	return b.String()
+}
+
+// ---------- sign-in ----------
+
+// signInNotices are chosen by key so a link can't inject text.
+var signInNotices = map[string]string{
+	"signed-out": "You signed out.",
+}
+
+// signInMessage turns a sign-in error into text for the page. Messages
+// meant for users are shown; anything else is logged with a reference the
+// user can quote, so provider responses and internal hosts stay private.
+func (h *Handler) signInMessage(provider string, err error) string {
+	if ue, ok := errors.AsType[*webauth.UserError](err); ok {
+		h.Logger.Info("web sign-in stopped provider=%q: %s", provider, err)
+		msg := ue.Error()
+		return strings.ToUpper(msg[:1]) + msg[1:] + "."
+	}
+	ref := make([]byte, 4)
+	_, _ = rand.Read(ref)
+	code := hex.EncodeToString(ref)
+	h.Logger.Warn("web sign-in failed provider=%q ref=%q: %s", provider, code, err)
+	return fmt.Sprintf("Sign-in didn't work. Try again, or give your Atlantis administrator this reference: %s.", code)
+}
+
+func noStore(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+}
+
+func (h *Handler) loginPage(w http.ResponseWriter, r *http.Request) {
+	noStore(w)
+	ret := r.URL.Query().Get("return")
+	if p := h.Auth.Authenticate(r); p.Can(webauth.RoleViewer) {
+		target, ok := h.Auth.SafeReturn(ret)
+		if !ok {
+			target = h.BasePath + "/ui"
+		}
+		http.Redirect(w, r, target, http.StatusSeeOther) // #nosec G710 -- target passed SafeReturn
+		return
+	}
+	h.renderSignIn(w, r, http.StatusOK, ret, "", signInNotices[r.URL.Query().Get("notice")])
+}
+
+func (h *Handler) renderSignIn(w http.ResponseWriter, r *http.Request, status int, ret, errMsg, notice string) {
+	if _, ok := h.Auth.SafeReturn(ret); !ok {
+		ret = ""
+	}
+	h.render(w, r, status, signInPage(signInData{
+		Base:      h.BasePath,
+		Providers: h.Auth.Providers(),
+		Return:    ret,
+		Error:     errMsg,
+		Notice:    notice,
+	}))
+}
+
+func (h *Handler) startLogin(w http.ResponseWriter, r *http.Request) {
+	noStore(w)
+	ret := r.URL.Query().Get("return")
+	provider := mux.Vars(r)["provider"]
+	if err := h.Auth.StartLogin(w, r, provider, ret); err != nil {
+		h.renderSignIn(w, r, http.StatusBadRequest, ret, h.signInMessage(provider, err), "")
+	}
+}
+
+func (h *Handler) finishLogin(w http.ResponseWriter, r *http.Request) {
+	noStore(w)
+	provider := mux.Vars(r)["provider"]
+	target, _, err := h.Auth.FinishLogin(w, r, provider)
+	if err != nil {
+		h.renderSignIn(w, r, http.StatusForbidden, "", h.signInMessage(provider, err), "")
+		return
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther) // #nosec G710 -- FinishLogin returns a SafeReturn path
+}
+
+func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
+	noStore(w)
+	if p := h.Auth.Authenticate(r); p != nil {
+		h.Logger.Info("web sign-out subject=%q provider=%q", p.Subject, p.Provider)
+	}
+	h.Auth.Logout(w)
+	http.Redirect(w, r, h.BasePath+"/ui/login?notice=signed-out", http.StatusSeeOther)
 }

@@ -105,16 +105,127 @@ Results currently use in-memory storage and are lost on restart. Drift detection
 
 Add `web-ui` to `experiments` to serve a new web UI at `/ui`. The existing UI at `/` is unchanged. The new UI shows pull requests with per-project status and plan changes, project locks with single and bulk unlock, the global apply lock, live job logs, and the health of the replica serving the page.
 
-The UI uses the same access control as the existing UI: [basic auth](server-configuration.md#web-basic-auth) when enabled, and nothing otherwise. Anyone who can reach `/ui` can discard plans and lock applies, so enable basic auth or put Atlantis behind an authenticating proxy. Actions reject cross-origin requests, and pages are served with a Content Security Policy that blocks inline scripts and styles. When basic auth is on, the pull request comment for a discarded plan names the user.
+Without [web UI sign-in](#web-ui-sign-in), the UI uses the same access control as the existing UI: [basic auth](server-configuration.md#web-basic-auth) when enabled, and nothing otherwise. In that case anyone who can reach `/ui` can discard plans and lock applies. Actions reject cross-origin requests, and pages are served with a Content Security Policy that blocks inline scripts and styles. The pull request comment for a discarded plan names the user who discarded it.
 
 Locks, the apply lock, and pull request status come from the locking database, so every replica shows the same values. Job lists and logs live in memory on the replica that ran the job and are cleared on restart. With several replicas behind a load balancer, a job page may show "no output" when the request reaches a different replica. The pages are built on the [ADR 0005](/contributing/adr/0005-use-durable-storage-with-one-data-model.md) data model so that durable storage can add history, cluster-wide jobs, and an audit log without changing them.
 
 To disable the new UI, remove `web-ui` from `experiments` and restart. Routes under `/ui` then return HTTP 404.
 
+### Web UI sign-in
+
+Web UI sign-in replaces basic auth for the pages at `/ui` with your identity provider, and gives each person a role. It only applies to `/ui`; the existing UI and the API keep their current authentication. Sign-in requires the `web-ui` experiment.
+
+| Role | Can |
+| --- | --- |
+| Viewer | See pull requests, plans, locks, and job logs |
+| Operator | Also discard plans and unlock projects |
+| Admin | Also lock and unlock applies for every repository |
+
+Roles come from [`--web-role-admins`](server-configuration.md#web-role-admins), [`--web-role-operators`](server-configuration.md#web-role-operators), and [`--web-role-viewers`](server-configuration.md#web-role-viewers). Each rule is `group:NAME` (or a bare `NAME`) for your identity provider's groups, `github:ORG` or `github:ORG/TEAM` for GitHub, `email:ADDRESS`, `domain:example.com`, or `*` for everyone who signed in. Email and domain rules only match emails the provider marks as verified. The highest matching role wins. People who match no rule are turned away unless you set [`--web-role-default`](server-configuration.md#web-role-default). Atlantis refuses to start with sign-in enabled and no role rules.
+
+There are two ways to sign in:
+
+- **Sign-in pages.** Atlantis redirects to an OpenID Connect provider or GitHub, using the authorization code flow with PKCE. Sessions are encrypted cookies, so any replica can serve any request without sticky sessions. Give every replica the same [`--web-session-secrets`](server-configuration.md#web-session-secrets).
+- **An authenticating proxy.** A load balancer or proxy in front of Atlantis signs people in and passes their identity on. Atlantis verifies it on every request and shows no sign-in page.
+
+Register `https://ATLANTIS_URL/ui/auth/callback/oidc` or `https://ATLANTIS_URL/ui/auth/callback/github` as the redirect URI, using your [`--atlantis-url`](server-configuration.md#atlantis-url).
+
+#### Microsoft Entra ID
+
+Register an application, add the redirect URI as a web platform, and create a client secret. Define app roles such as `atlantis-admins` and `atlantis-operators`, assign them to groups, and read them from the `roles` claim. App roles avoid Entra ID's group limit: when a user belongs to more than 200 groups, Entra ID leaves groups out of the token, and Atlantis turns the sign-in away with an explanation rather than guessing.
+
+```sh
+ATLANTIS_EXPERIMENTS=web-ui
+ATLANTIS_WEB_SSO_PROVIDERS=oidc
+ATLANTIS_WEB_OIDC_NAME="Microsoft Entra ID"
+ATLANTIS_WEB_OIDC_ISSUER_URL=https://login.microsoftonline.com/TENANT_ID/v2.0
+ATLANTIS_WEB_OIDC_CLIENT_ID=APPLICATION_ID
+ATLANTIS_WEB_OIDC_CLIENT_SECRET=...
+ATLANTIS_WEB_OIDC_GROUPS_CLAIMS=roles
+ATLANTIS_WEB_ROLE_ADMINS=atlantis-admins
+ATLANTIS_WEB_ROLE_OPERATORS=atlantis-operators
+ATLANTIS_WEB_SESSION_SECRETS="$(openssl rand -hex 32)"
+```
+
+Use the tenant-specific issuer; the multi-tenant `common` endpoint is not supported.
+
+#### Google Workspace
+
+Create an OAuth client of type "Web application" with `https://ATLANTIS_URL/ui/auth/callback/google` as an authorized redirect URI. Google has its own provider so it can run next to another OIDC provider such as Entra ID. [`--web-google-allowed-domains`](server-configuration.md#web-google-allowed-domains) is required, because anyone can create a Google account.
+
+```sh
+ATLANTIS_WEB_SSO_PROVIDERS=oidc,google   # or just google
+ATLANTIS_WEB_GOOGLE_CLIENT_ID=0123-abc.apps.googleusercontent.com
+ATLANTIS_WEB_GOOGLE_CLIENT_SECRET=...
+ATLANTIS_WEB_GOOGLE_ALLOWED_DOMAINS=acme.com
+ATLANTIS_WEB_ROLE_ADMINS=email:platform-lead@acme.com
+ATLANTIS_WEB_ROLE_VIEWERS=domain:acme.com
+```
+
+Google doesn't include groups in tokens, so grant roles by domain or email. For Google group membership, put [Dex](https://dexidp.io/docs/connectors/google/) in between or use [Identity-Aware Proxy](#google-cloud-identity-aware-proxy).
+
+#### Okta, Keycloak, Auth0, GitLab, Amazon Cognito, and Dex
+
+Use the provider's issuer URL and configure it to send groups. Okta needs a groups claim on the authorization server and the `groups` scope. Keycloak needs a group membership mapper. Auth0 needs an Action that adds a groups claim, and then [`--web-oidc-groups-claims`](server-configuration.md#web-oidc-groups-claims) set to that claim's name. GitLab reports groups from its userinfo endpoint, which Atlantis reads when the ID token has none. Cognito puts groups in `cognito:groups`.
+
+#### GitHub
+
+Create a GitHub OAuth app, or use a GitHub App with user authorization, with the callback URL. [`--web-github-allowed-orgs`](server-configuration.md#web-github-allowed-orgs) is required, because anyone can create a GitHub account. Organizations become groups named `github:ORG` and teams become `github:ORG/TEAM`; a child team's members also count as members of its parent team. The `github:` prefix keeps a GitHub organization from matching a group of the same name from another provider. GitHub Enterprise uses [`--gh-hostname`](server-configuration.md#gh-hostname).
+
+```sh
+ATLANTIS_WEB_SSO_PROVIDERS=github
+ATLANTIS_WEB_GITHUB_CLIENT_ID=...
+ATLANTIS_WEB_GITHUB_CLIENT_SECRET=...
+ATLANTIS_WEB_GITHUB_ALLOWED_ORGS=acme
+ATLANTIS_WEB_ROLE_ADMINS=github:acme/platform
+ATLANTIS_WEB_ROLE_OPERATORS=github:acme/sre
+ATLANTIS_WEB_ROLE_VIEWERS=github:acme
+```
+
+`--web-sso-providers=oidc,github` shows both buttons.
+
+#### AWS Application Load Balancer and IAM Identity Center
+
+Configure the load balancer listener to authenticate users, then let Atlantis verify the signed `x-amzn-oidc-data` header. IAM Identity Center supports only SAML for application sign-in, so connect it to an Amazon Cognito user pool as a SAML identity provider and point the load balancer at Cognito. Pass groups from Cognito as a `groups` claim to use group rules.
+
+```sh
+ATLANTIS_WEB_PROXY_AUTH=alb
+ATLANTIS_WEB_PROXY_ALB_ARN=arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/atlantis/abc
+ATLANTIS_WEB_ROLE_VIEWERS=domain:acme.com
+```
+
+Atlantis checks the signature with the region's public key and that the header was signed by this load balancer. Every listener rule that forwards to Atlantis must authenticate users; otherwise a header issued for another application behind the same load balancer could be replayed. Atlantis trusts the email only when the identity provider sends `email_verified: true`.
+
+#### Google Cloud Identity-Aware Proxy
+
+```sh
+ATLANTIS_WEB_PROXY_AUTH=iap
+ATLANTIS_WEB_PROXY_IAP_AUDIENCE=/projects/PROJECT_NUMBER/global/backendServices/SERVICE_ID
+ATLANTIS_WEB_ROLE_VIEWERS=domain:acme.com
+```
+
+#### oauth2-proxy, Pomerium, and other proxies
+
+Have the proxy pass the user, email, and groups in headers, and tell Atlantis which networks the proxy connects from. Atlantis checks the connection's address, not `X-Forwarded-For`, so other clients can't set these headers. Anything else that can connect from those networks can also set them, so keep the networks narrow; Atlantis rejects networks broader than `/8` for IPv4 or `/16` for IPv6.
+
+```sh
+ATLANTIS_WEB_PROXY_AUTH=header
+ATLANTIS_WEB_PROXY_USER_HEADER=X-Forwarded-User
+ATLANTIS_WEB_PROXY_EMAIL_HEADER=X-Forwarded-Email
+ATLANTIS_WEB_PROXY_GROUPS_HEADER=X-Forwarded-Groups
+ATLANTIS_WEB_PROXY_TRUSTED_CIDRS=10.0.0.0/8
+```
+
+#### Sessions and auditing
+
+A sign-in lasts [`--web-session-lifetime`](server-configuration.md#web-session-lifetime), 4 hours by default. The role is decided at sign-in and kept for the whole session, so someone removed from a group keeps their role until the session ends. Signing out clears the session in that browser only. To end every session at once, for example after removing an administrator, replace all session secrets and restart. Session cookies are `Secure` unless Atlantis runs on `localhost` over plain http.
+
+Sign-ins, sign-outs, denials, and every action are logged with the user, provider, and role; discarded-plan comments on pull requests name the user. When a sign-in fails for a reason the user can't fix, the page shows a short reference that matches the detailed log entry.
+
 ### Web UI graduation checklist
 
 - [x] Serve the UI only with the `web-ui` permission. Evidence: route tests in `server/experiments_test.go`.
-- [ ] Add web sign-in and role-based access for UI actions (tracked separately; requires an ADR).
+- [ ] Accept the ADR for web sign-in and role-based access; sign-in is implemented behind this experiment.
 - [ ] Serve job history and logs from durable storage when the `durable-storage` experiment is enabled.
 - [ ] Decide whether the new UI replaces the UI at `/`, and document the migration.
 - [ ] Record the graduation decision and first stable release in [web UI tracker #6158](https://github.com/runatlantis/atlantis/issues/6158).
