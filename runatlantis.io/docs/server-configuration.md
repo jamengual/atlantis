@@ -1795,6 +1795,36 @@ ATLANTIS_WEB_GITHUB_CLIENT_SECRET=SECRET
 
 Client secret for GitHub sign-in. Set it with the environment variable. See [web UI sign-in](experiments.md#web-ui-sign-in).
 
+### `--web-google-allowed-domains` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-google-allowed-domains=acme.com
+# or
+ATLANTIS_WEB_GOOGLE_ALLOWED_DOMAINS=acme.com
+```
+
+Google Workspace domains allowed to sign in with Google. Required for Google sign-in, because anyone can create a Google account. Checked against the verified `hd` claim or email. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-google-client-id` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-google-client-id=0123-abc.apps.googleusercontent.com
+# or
+ATLANTIS_WEB_GOOGLE_CLIENT_ID=0123-abc.apps.googleusercontent.com
+```
+
+Client ID of the Google OAuth client used for web UI sign-in. Register `https://ATLANTIS_URL/ui/auth/callback/google` as an authorized redirect URI. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-google-client-secret` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-google-client-secret=SECRET
+# or
+ATLANTIS_WEB_GOOGLE_CLIENT_SECRET=SECRET
+```
+
+Client secret for Google sign-in. Set it with the environment variable. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
 ### `--web-oidc-allowed-domains` <Badge text="Experimental" type="warning"/>
 
 ```bash
@@ -2013,7 +2043,7 @@ atlantis server --web-sso-providers=oidc,github
 ATLANTIS_WEB_SSO_PROVIDERS=oidc,github
 ```
 
-Sign-in providers for the web UI at `/ui`, separated by commas: `oidc` and `github`. Requires the `web-ui` experiment, [`--web-session-secrets`](#web-session-secrets), and at least one role rule. Can't be combined with [`--web-proxy-auth`](#web-proxy-auth). See [web UI sign-in](experiments.md#web-ui-sign-in).
+Sign-in providers for the web UI at `/ui`, separated by commas: `oidc`, `google`, and `github`. Requires the `web-ui` experiment, [`--web-session-secrets`](#web-session-secrets), and at least one role rule. Can't be combined with [`--web-proxy-auth`](#web-proxy-auth). See [web UI sign-in](experiments.md#web-ui-sign-in).
 
 ### `--web-username`
 

@@ -178,6 +178,9 @@ const (
 	WebGitHubClientIDFlag            = "web-github-client-id"
 	WebGitHubClientSecretFlag        = "web-github-client-secret" // #nosec G101 -- flag name, not a credential
 	WebGitHubAllowedOrgsFlag         = "web-github-allowed-orgs"
+	WebGoogleClientIDFlag            = "web-google-client-id"
+	WebGoogleClientSecretFlag        = "web-google-client-secret" // #nosec G101 -- flag name, not a credential
+	WebGoogleAllowedDomainsFlag      = "web-google-allowed-domains"
 	WebProxyAuthFlag                 = "web-proxy-auth"
 	WebProxyALBArnFlag               = "web-proxy-alb-arn"
 	WebProxyIAPAudienceFlag          = "web-proxy-iap-audience"
@@ -238,7 +241,7 @@ const (
 
 var stringSliceFlags = map[string]stringSliceFlag{
 	WebSSOProvidersFlag: {
-		description: "Experimental. Sign-in providers for the web UI at /ui, separated by commas: oidc, github. Requires the web-ui experiment and --web-session-secrets.",
+		description: "Experimental. Sign-in providers for the web UI at /ui, separated by commas: oidc, google, github. Requires the web-ui experiment and --web-session-secrets.",
 	},
 	WebSessionSecretsFlag: {
 		description: "Experimental. Secrets that encrypt web UI session cookies, separated by commas, each at least 32 random characters. The first encrypts; all decrypt, so add a new secret in front to rotate. Every replica needs the same secrets. Set with ATLANTIS_WEB_SESSION_SECRETS.",
@@ -256,6 +259,9 @@ var stringSliceFlags = map[string]stringSliceFlag{
 	},
 	WebGitHubAllowedOrgsFlag: {
 		description: "Experimental. Only members of these GitHub organizations can sign in with GitHub. Required for GitHub sign-in. In role rules, GitHub groups are github:ORG and github:ORG/TEAM.",
+	},
+	WebGoogleAllowedDomainsFlag: {
+		description: "Experimental. Google Workspace domains allowed to sign in with Google, such as acme.com. Required for Google sign-in.",
 	},
 	WebProxyTrustedCIDRsFlag: {
 		description: "Experimental. Networks allowed to send identity headers when --web-proxy-auth=header, such as 10.0.0.0/8. The connection address is checked, not X-Forwarded-For.",
@@ -297,6 +303,12 @@ var stringFlags = map[string]stringFlag{
 	},
 	WebGitHubClientSecretFlag: {
 		description: "Experimental. Client secret for GitHub sign-in. Set with ATLANTIS_WEB_GITHUB_CLIENT_SECRET.",
+	},
+	WebGoogleClientIDFlag: {
+		description: "Experimental. Client ID of the Google OAuth client used for web UI sign-in. Requires --web-google-allowed-domains.",
+	},
+	WebGoogleClientSecretFlag: {
+		description: "Experimental. Client secret for Google sign-in. Set with ATLANTIS_WEB_GOOGLE_CLIENT_SECRET.",
 	},
 	WebProxyAuthFlag: {
 		description: "Experimental. Take the web UI user from an authenticating proxy instead of a sign-in page: alb, iap, or header. Requires the web-ui experiment.",

@@ -151,18 +151,18 @@ Use the tenant-specific issuer; the multi-tenant `common` endpoint is not suppor
 
 #### Google Workspace
 
-Create an OAuth client of type "Web application" with the redirect URI. Google doesn't include groups in tokens, so grant roles by domain or email, and restrict sign-in to your domain:
+Create an OAuth client of type "Web application" with `https://ATLANTIS_URL/ui/auth/callback/google` as an authorized redirect URI. Google has its own provider so it can run next to another OIDC provider such as Entra ID. [`--web-google-allowed-domains`](server-configuration.md#web-google-allowed-domains) is required, because anyone can create a Google account.
 
 ```sh
-ATLANTIS_WEB_SSO_PROVIDERS=oidc
-ATLANTIS_WEB_OIDC_NAME=Google
-ATLANTIS_WEB_OIDC_ISSUER_URL=https://accounts.google.com
-ATLANTIS_WEB_OIDC_ALLOWED_DOMAINS=acme.com
+ATLANTIS_WEB_SSO_PROVIDERS=oidc,google   # or just google
+ATLANTIS_WEB_GOOGLE_CLIENT_ID=0123-abc.apps.googleusercontent.com
+ATLANTIS_WEB_GOOGLE_CLIENT_SECRET=...
+ATLANTIS_WEB_GOOGLE_ALLOWED_DOMAINS=acme.com
 ATLANTIS_WEB_ROLE_ADMINS=email:platform-lead@acme.com
 ATLANTIS_WEB_ROLE_VIEWERS=domain:acme.com
 ```
 
-For Google group membership, put [Dex](https://dexidp.io/docs/connectors/google/) in between or use [Identity-Aware Proxy](#google-cloud-identity-aware-proxy).
+Google doesn't include groups in tokens, so grant roles by domain or email. For Google group membership, put [Dex](https://dexidp.io/docs/connectors/google/) in between or use [Identity-Aware Proxy](#google-cloud-identity-aware-proxy).
 
 #### Okta, Keycloak, Auth0, GitLab, Amazon Cognito, and Dex
 

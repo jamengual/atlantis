@@ -44,6 +44,18 @@ func TestNewWebAuth(t *testing.T) {
 	Ok(t, err)
 	Equals(t, 2, len(m.Providers()))
 
+	both := UserConfig{WebSSOProviders: []string{"oidc", "google"}, WebSessionSecrets: []string{testSessionSecret},
+		WebOIDCIssuerURL: "https://login.microsoftonline.com/t/v2.0", WebOIDCClientID: "id", WebOIDCClientSecret: "secret",
+		WebGoogleClientID: "g", WebGoogleClientSecret: "gs", WebGoogleAllowedDomains: []string{"acme.com"}, WebRoleViewers: []string{"*"}}
+	m, err = newWebAuth(both, public, logger)
+	Ok(t, err)
+	Equals(t, "oidc", m.Providers()[0].ID)
+	Equals(t, "google", m.Providers()[1].ID)
+	Equals(t, "Google", m.Providers()[1].Name)
+	both.WebGoogleAllowedDomains = nil
+	_, err = newWebAuth(both, public, logger)
+	ErrContains(t, "web-google-allowed-domains", err)
+
 	proxy := UserConfig{WebProxyAuth: "header", WebProxyUserHeader: "X-User", WebProxyTrustedCIDRs: []string{"10.0.0.0/8"}, WebRoleViewers: []string{"*"}}
 	m, err = newWebAuth(proxy, public, logger)
 	Ok(t, err)

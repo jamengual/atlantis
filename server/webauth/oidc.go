@@ -32,6 +32,8 @@ type LoginProvider interface {
 // OIDCConfig configures an OpenID Connect provider such as Microsoft Entra
 // ID, Google, Okta, Keycloak, Auth0, Amazon Cognito, GitLab, or Dex.
 type OIDCConfig struct {
+	// ID is the provider's URL segment. Defaults to "oidc".
+	ID string
 	// Name is shown on the sign-in button, for example "Microsoft Entra ID".
 	Name         string
 	IssuerURL    string
@@ -74,6 +76,9 @@ func NewOIDCProvider(cfg OIDCConfig) (*OIDCProvider, error) {
 	if cfg.Name == "" {
 		cfg.Name = "Single sign-on"
 	}
+	if cfg.ID == "" {
+		cfg.ID = "oidc"
+	}
 	if len(cfg.GroupsClaims) == 0 {
 		cfg.GroupsClaims = []string{"groups"}
 	}
@@ -85,7 +90,7 @@ func (p *OIDCProvider) withClient(ctx context.Context) context.Context {
 	return oidc.ClientContext(ctx, p.client)
 }
 
-func (p *OIDCProvider) ID() string   { return "oidc" }
+func (p *OIDCProvider) ID() string   { return p.cfg.ID }
 func (p *OIDCProvider) Name() string { return p.cfg.Name }
 
 func (p *OIDCProvider) discover(ctx context.Context) (*oidc.Provider, *oidc.IDTokenVerifier, error) {
@@ -258,4 +263,22 @@ func checkDomain(id Identity, claims map[string]any, allowed []string) error {
 		}
 	}
 	return userError("accounts from this domain can't sign in to Atlantis. Allowed domains are %s", strings.Join(allowed, ", "))
+}
+
+// NewGoogleProvider signs users in with Google accounts. Anyone can create a
+// Google account, so it requires the Google Workspace domains to admit, which
+// are checked against the verified hd claim or email.
+func NewGoogleProvider(clientID, clientSecret string, allowedDomains []string) (*OIDCProvider, error) {
+	if len(allowedDomains) == 0 {
+		return nil, errors.New("Google sign-in needs the allowed domains, because anyone can create a Google account")
+	}
+	return NewOIDCProvider(OIDCConfig{
+		ID:             "google",
+		Name:           "Google",
+		IssuerURL:      googleIssuer,
+		ClientID:       clientID,
+		ClientSecret:   clientSecret,
+		Scopes:         []string{"email", "profile"},
+		AllowedDomains: allowedDomains,
+	})
 }

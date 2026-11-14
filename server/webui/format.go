@@ -324,6 +324,8 @@ func providerMark(id string) string {
 		return "GH"
 	case "oidc":
 		return "ID"
+	case "google":
+		return "G"
 	}
 	return "?"
 }

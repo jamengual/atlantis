@@ -101,6 +101,12 @@ func newWebAuth(c UserConfig, publicURL *url.URL, logger logging.SimpleLogging) 
 				return nil, fmt.Errorf("web-sso-providers oidc: %w; set web-oidc-issuer-url, web-oidc-client-id, and web-oidc-client-secret", err)
 			}
 			cfg.Providers = append(cfg.Providers, p)
+		case "google":
+			p, err := webauth.NewGoogleProvider(c.WebGoogleClientID, c.WebGoogleClientSecret, c.WebGoogleAllowedDomains)
+			if err != nil {
+				return nil, fmt.Errorf("web-sso-providers google: %w; set web-google-client-id, web-google-client-secret, and web-google-allowed-domains", err)
+			}
+			cfg.Providers = append(cfg.Providers, p)
 		case "github":
 			p, err := webauth.NewGitHubProvider(webauth.GitHubConfig{
 				ClientID:     c.WebGitHubClientID,
@@ -113,7 +119,7 @@ func newWebAuth(c UserConfig, publicURL *url.URL, logger logging.SimpleLogging) 
 			}
 			cfg.Providers = append(cfg.Providers, p)
 		default:
-			return nil, fmt.Errorf("web-sso-providers: unknown provider %q; use oidc or github", name)
+			return nil, fmt.Errorf("web-sso-providers: unknown provider %q; use oidc, google, or github", name)
 		}
 	}
 	m, err := webauth.NewManager(cfg)

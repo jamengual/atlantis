@@ -144,35 +144,38 @@ type UserConfig struct {
 	WebhookHttpHeaders         string          `mapstructure:"webhook-http-headers"`
 	WebBasicAuth               bool            `mapstructure:"web-basic-auth"`
 	// Web UI sign-in. These apply to the web-ui experiment's pages at /ui.
-	WebSSOProviders       []string `mapstructure:"web-sso-providers"`
-	WebSessionSecrets     []string `mapstructure:"web-session-secrets"`
-	WebSessionLifetime    string   `mapstructure:"web-session-lifetime"`
-	WebOIDCName           string   `mapstructure:"web-oidc-name"`
-	WebOIDCIssuerURL      string   `mapstructure:"web-oidc-issuer-url"`
-	WebOIDCClientID       string   `mapstructure:"web-oidc-client-id"`
-	WebOIDCClientSecret   string   `mapstructure:"web-oidc-client-secret"`
-	WebOIDCScopes         []string `mapstructure:"web-oidc-scopes"`
-	WebOIDCGroupsClaims   []string `mapstructure:"web-oidc-groups-claims"`
-	WebOIDCAllowedDomains []string `mapstructure:"web-oidc-allowed-domains"`
-	WebGitHubClientID     string   `mapstructure:"web-github-client-id"`
-	WebGitHubClientSecret string   `mapstructure:"web-github-client-secret"`
-	WebGitHubAllowedOrgs  []string `mapstructure:"web-github-allowed-orgs"`
-	WebProxyAuth          string   `mapstructure:"web-proxy-auth"`
-	WebProxyALBArn        string   `mapstructure:"web-proxy-alb-arn"`
-	WebProxyIAPAudience   string   `mapstructure:"web-proxy-iap-audience"`
-	WebProxyUserHeader    string   `mapstructure:"web-proxy-user-header"`
-	WebProxyEmailHeader   string   `mapstructure:"web-proxy-email-header"`
-	WebProxyGroupsHeader  string   `mapstructure:"web-proxy-groups-header"`
-	WebProxyTrustedCIDRs  []string `mapstructure:"web-proxy-trusted-cidrs"`
-	WebRoleAdmins         []string `mapstructure:"web-role-admins"`
-	WebRoleOperators      []string `mapstructure:"web-role-operators"`
-	WebRoleViewers        []string `mapstructure:"web-role-viewers"`
-	WebRoleDefault        string   `mapstructure:"web-role-default"`
-	WebUsername           string   `mapstructure:"web-username"`
-	WebPassword           string   `mapstructure:"web-password"`
-	WriteGitCreds         bool     `mapstructure:"write-git-creds"`
-	WebsocketCheckOrigin  bool     `mapstructure:"websocket-check-origin"`
-	UseTFPluginCache      bool     `mapstructure:"use-tf-plugin-cache"`
+	WebSSOProviders         []string `mapstructure:"web-sso-providers"`
+	WebSessionSecrets       []string `mapstructure:"web-session-secrets"`
+	WebSessionLifetime      string   `mapstructure:"web-session-lifetime"`
+	WebOIDCName             string   `mapstructure:"web-oidc-name"`
+	WebOIDCIssuerURL        string   `mapstructure:"web-oidc-issuer-url"`
+	WebOIDCClientID         string   `mapstructure:"web-oidc-client-id"`
+	WebOIDCClientSecret     string   `mapstructure:"web-oidc-client-secret"`
+	WebOIDCScopes           []string `mapstructure:"web-oidc-scopes"`
+	WebOIDCGroupsClaims     []string `mapstructure:"web-oidc-groups-claims"`
+	WebOIDCAllowedDomains   []string `mapstructure:"web-oidc-allowed-domains"`
+	WebGitHubClientID       string   `mapstructure:"web-github-client-id"`
+	WebGitHubClientSecret   string   `mapstructure:"web-github-client-secret"`
+	WebGitHubAllowedOrgs    []string `mapstructure:"web-github-allowed-orgs"`
+	WebGoogleClientID       string   `mapstructure:"web-google-client-id"`
+	WebGoogleClientSecret   string   `mapstructure:"web-google-client-secret"`
+	WebGoogleAllowedDomains []string `mapstructure:"web-google-allowed-domains"`
+	WebProxyAuth            string   `mapstructure:"web-proxy-auth"`
+	WebProxyALBArn          string   `mapstructure:"web-proxy-alb-arn"`
+	WebProxyIAPAudience     string   `mapstructure:"web-proxy-iap-audience"`
+	WebProxyUserHeader      string   `mapstructure:"web-proxy-user-header"`
+	WebProxyEmailHeader     string   `mapstructure:"web-proxy-email-header"`
+	WebProxyGroupsHeader    string   `mapstructure:"web-proxy-groups-header"`
+	WebProxyTrustedCIDRs    []string `mapstructure:"web-proxy-trusted-cidrs"`
+	WebRoleAdmins           []string `mapstructure:"web-role-admins"`
+	WebRoleOperators        []string `mapstructure:"web-role-operators"`
+	WebRoleViewers          []string `mapstructure:"web-role-viewers"`
+	WebRoleDefault          string   `mapstructure:"web-role-default"`
+	WebUsername             string   `mapstructure:"web-username"`
+	WebPassword             string   `mapstructure:"web-password"`
+	WriteGitCreds           bool     `mapstructure:"write-git-creds"`
+	WebsocketCheckOrigin    bool     `mapstructure:"websocket-check-origin"`
+	UseTFPluginCache        bool     `mapstructure:"use-tf-plugin-cache"`
 
 	// Experiments grants server-only permissions for experimental settings and routes.
 	Experiments []string `mapstructure:"experiments"`
