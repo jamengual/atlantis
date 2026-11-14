@@ -415,3 +415,23 @@ func TestLogoutClearsSessionUnderOldPath(t *testing.T) {
 	_, body := fetch(t, c, a.srv.URL+"/ui")
 	Assert(t, strings.HasPrefix(body, "login page"), "still signed in after logout: %s", body)
 }
+
+func TestGitHubHostname(t *testing.T) {
+	for host, want := range map[string]string{"": "github.com", "GitHub.Acme.Internal": "github.acme.internal", "acme.ghe.com": "acme.ghe.com"} {
+		p := mustGitHub(t, webauth.GitHubConfig{ClientID: "id", ClientSecret: "s", Hostname: host, AllowedOrgs: []string{"acme"}})
+		Equals(t, want, p.Hostname())
+		public, _ := url.Parse("https://atlantis.acme.com")
+		m, err := webauth.NewManager(webauth.Config{PublicURL: public, SessionSecrets: []string{secretA}, Providers: []webauth.LoginProvider{p}, Roles: webauth.RoleMapper{Default: webauth.RoleViewer}})
+		Ok(t, err)
+		Equals(t, want, m.GitHubHostname())
+	}
+	// Without GitHub sign-in, nobody has a GitHub login.
+	oidc := webauthtest.NewOIDC()
+	defer oidc.Server.Close()
+	a := newApp(t, "", func(*url.URL) webauth.Config {
+		p, err := webauth.NewOIDCProvider(webauth.OIDCConfig{IssuerURL: oidc.Server.URL, ClientID: oidc.ClientID, ClientSecret: oidc.ClientSecret})
+		Ok(t, err)
+		return webauth.Config{SessionSecrets: []string{secretA}, Providers: []webauth.LoginProvider{p}, Roles: webauth.RoleMapper{Default: webauth.RoleViewer}}
+	})
+	Equals(t, "", a.m.GitHubHostname())
+}

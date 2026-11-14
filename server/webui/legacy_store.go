@@ -12,11 +12,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/runatlantis/atlantis/server/core/config/valid"
 	"github.com/runatlantis/atlantis/server/core/locking"
 	"github.com/runatlantis/atlantis/server/events"
 	"github.com/runatlantis/atlantis/server/events/command"
 	"github.com/runatlantis/atlantis/server/events/models"
 	"github.com/runatlantis/atlantis/server/jobs"
+	"github.com/runatlantis/atlantis/server/logging"
 )
 
 // LockLister lists project locks keyed by lock ID.
@@ -79,6 +81,9 @@ type LegacyStore struct {
 	// Maintenance holds this replica's maintenance windows. Nil means
 	// there are none.
 	Maintenance *locking.Maintenance
+	// PolicySets is the policy configuration from the server-side repo
+	// config, for required approvals and owners. Nil when unknown.
+	PolicySets *valid.PolicySets
 
 	changesCache sync.Map // job ID -> Changes
 	countsCache  sync.Map // plan JSON path -> cachedCounts
@@ -200,6 +205,7 @@ func (s *LegacyStore) buildPull(st models.PullStatus, locks map[string]models.Pr
 			Workspace: ps.Workspace,
 			Name:      ps.ProjectName,
 			State:     stateFor(ps.Status),
+			Policies:  s.policySets(ps.PolicyStatus),
 		}
 		for id, l := range locks {
 			if lockOwnedBy(l, pr.Repo, pr.Num) &&
@@ -503,6 +509,15 @@ type LegacyActions struct {
 	// Maintenance holds this replica's maintenance windows. Nil means
 	// windows can't be started.
 	Maintenance *locking.Maintenance
+	// PullStatuses, Commenter, Commands and Logger run policy approvals.
+	// Approvals are unavailable when any is nil.
+	PullStatuses PullStatusDB
+	Commenter    PullCommenter
+	Commands     CommentCommandRunner
+	Logger       logging.SimpleLogging
+	// Start runs a command in the background. Defaults to a new goroutine;
+	// tests replace it.
+	Start func(func())
 }
 
 var _ Actions = (*LegacyActions)(nil)

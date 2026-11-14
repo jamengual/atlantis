@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -41,9 +42,10 @@ func newAccessPolicy(c UserConfig, globalCfg valid.GlobalCfg) (*webauth.Policy, 
 		return nil, fmt.Errorf("web-role-default: %w", err)
 	}
 	policy, err := webauth.NewPolicy(webauth.PolicyConfig{
-		Flags:  webauth.RoleMapper{Admins: c.WebRoleAdmins, Operators: c.WebRoleOperators, Viewers: c.WebRoleViewers, Default: defaultRole},
-		Access: globalCfg.Access,
-		Repos:  globalCfg.Repos,
+		Flags:            webauth.RoleMapper{Admins: c.WebRoleAdmins, Operators: c.WebRoleOperators, Viewers: c.WebRoleViewers, Default: defaultRole},
+		Access:           globalCfg.Access,
+		Repos:            globalCfg.Repos,
+		PolicyOwnerTeams: slices.Clone(globalCfg.PolicySets.AllTeams()),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("web access policy: %w", err)

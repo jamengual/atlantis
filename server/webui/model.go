@@ -63,6 +63,113 @@ type Project struct {
 	LockID    string
 	// LatestJobID is the newest job this replica has output for, if any.
 	LatestJobID string
+	// Policies are the policy set results of the project's latest policy
+	// check, without the policy output. Empty when no check ran.
+	Policies []PolicySet
+}
+
+// PolicyFailing reports whether a policy set of the project failed and
+// still needs approvals.
+func (p Project) PolicyFailing() bool {
+	for _, s := range p.Policies {
+		if !s.Cleared() {
+			return true
+		}
+	}
+	return false
+}
+
+// FailingPolicySets lists the names of the policy sets that failed and still
+// need approvals.
+func (p Project) FailingPolicySets() []string {
+	var out []string
+	for _, s := range p.Policies {
+		if !s.Cleared() {
+			out = append(out, s.Name)
+		}
+	}
+	return out
+}
+
+// PolicyOwners are the people and GitHub teams who may approve a policy set.
+// Teams are team slugs in the repository's organization.
+type PolicyOwners struct {
+	Users []string
+	Teams []string
+}
+
+// Empty reports whether nobody is named.
+func (o PolicyOwners) Empty() bool {
+	return len(o.Users) == 0 && len(o.Teams) == 0
+}
+
+// PolicyApproval is one approval of a failing policy set.
+type PolicyApproval struct {
+	By string
+	// Current is false when the approval was given for an earlier failure,
+	// so it no longer counts.
+	Current bool
+}
+
+// PolicySet is one policy set's result for a project.
+type PolicySet struct {
+	Name      string
+	Passed    bool
+	Approvals []PolicyApproval
+	// Configured is false when the server-side repo config no longer has
+	// the policy set, so the required approvals and owners are unknown.
+	Configured bool
+	// Required is how many approvals a failing set needs.
+	Required int
+	Owners   PolicyOwners
+	// PreventSelfApprove is true when the pull request's author may not
+	// approve the set.
+	PreventSelfApprove bool
+	// Output is the policy tool's output. It is only set by GetPolicies,
+	// and only when this replica has it.
+	Output string
+}
+
+// CurrentApprovals counts the approvals that still count.
+func (s PolicySet) CurrentApprovals() int {
+	n := 0
+	for _, a := range s.Approvals {
+		if a.Current {
+			n++
+		}
+	}
+	return n
+}
+
+// Cleared reports whether the set passed or has enough approvals.
+func (s PolicySet) Cleared() bool {
+	return s.Passed || (s.Configured && s.CurrentApprovals() >= s.Required)
+}
+
+// PolicyOutputStatus says whether the policy output can be shown.
+type PolicyOutputStatus string
+
+const (
+	// PolicyOutputReady means the output was read.
+	PolicyOutputReady PolicyOutputStatus = "ready"
+	// PolicyOutputMissing means this replica has no policy output for the
+	// project's current plan.
+	PolicyOutputMissing PolicyOutputStatus = "missing"
+	// PolicyOutputOutdated means the output is from an earlier plan.
+	PolicyOutputOutdated PolicyOutputStatus = "outdated"
+	// PolicyOutputUnreadable means the output file could not be read.
+	PolicyOutputUnreadable PolicyOutputStatus = "unreadable"
+)
+
+// ProjectPolicies is the policy check of one project in a pull request.
+type ProjectPolicies struct {
+	Sets []PolicySet
+	// Admins are the top-level policy owners, who may approve every set.
+	Admins PolicyOwners
+	// Output says whether the sets' Output fields were filled.
+	Output PolicyOutputStatus
+	// CheckedAt is when the policy output was written, when known.
+	CheckedAt time.Time
 }
 
 // PullRequest is a pull request Atlantis has run commands for.
@@ -77,6 +184,17 @@ type PullRequest struct {
 	Projects   []Project
 	// LastActivity is the newest lock or job time this replica knows about.
 	LastActivity time.Time
+}
+
+// PolicyFailing reports whether a project has a failing policy set that
+// still needs approvals.
+func (p PullRequest) PolicyFailing() bool {
+	for _, proj := range p.Projects {
+		if proj.PolicyFailing() {
+			return true
+		}
+	}
+	return false
 }
 
 // Changes sums the known plan changes across projects.
@@ -238,6 +356,9 @@ type Capabilities struct {
 	// SharedPlans is true when plan details are stored centrally and any
 	// replica can show them.
 	SharedPlans bool
+	// SharedPolicyOutput is true when policy check output is stored
+	// centrally and any replica can show it.
+	SharedPolicyOutput bool
 	// SharedMaintenance is true when maintenance windows are stored
 	// centrally, so they block commands on every replica and survive
 	// restarts.
@@ -296,6 +417,9 @@ type Store interface {
 	// GetPlan returns the resource changes in a project's latest plan. It
 	// returns nil when Atlantis has no such project in the pull request.
 	GetPlan(ctx context.Context, repo Repository, num int, project ProjectRef) (*ProjectPlan, error)
+	// GetPolicies returns a project's latest policy check. It returns nil
+	// when Atlantis has no such project in the pull request.
+	GetPolicies(ctx context.Context, repo Repository, num int, project ProjectRef) (*ProjectPolicies, error)
 	ListLocks(ctx context.Context) ([]Lock, error)
 	ApplyLock(ctx context.Context) (ApplyLock, error)
 	// ListMaintenance returns the active maintenance windows, oldest first.
@@ -331,4 +455,23 @@ type Actions interface {
 	// EndMaintenance ends a window. It returns false when no active window
 	// has the ID.
 	EndMaintenance(id string) (MaintenanceWindow, bool, error)
+	// ApprovePolicies starts "atlantis approve_policies" for a pull request
+	// on behalf of a VCS user, after commenting who asked for it. The
+	// command runs in the background and posts its result on the pull
+	// request.
+	ApprovePolicies(req PolicyApprovalRequest) error
+}
+
+// PolicyApprovalRequest asks to approve failing policies.
+type PolicyApprovalRequest struct {
+	Repo Repository
+	Num  int
+	// Project limits the approval to one project; nil means every project.
+	Project *ProjectRef
+	// PolicySet limits the approval to one policy set; empty means every
+	// failing set.
+	PolicySet string
+	// Login is the GitHub username the approval is recorded for and the
+	// comment names. The command checks it against the policy owners again.
+	Login string
 }

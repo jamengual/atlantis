@@ -103,9 +103,9 @@ Results currently use in-memory storage and are lost on restart. Drift detection
 
 ## Web UI
 
-Add `web-ui` to `experiments` to serve a new web UI at `/ui`. The existing UI at `/` is unchanged. The new UI shows pull requests with per-project status and plan changes, project locks with single and bulk unlock, the global apply lock, maintenance windows, live job logs with a way to stop a running job, and the health of the replica serving the page.
+Add `web-ui` to `experiments` to serve a new web UI at `/ui`. The existing UI at `/` is unchanged. The new UI shows pull requests with per-project status and plan changes, project locks with single and bulk unlock, the global apply lock, maintenance windows, policy check results with a way for policy owners to approve them, live job logs with a way to stop a running job, and the health of the replica serving the page.
 
-Without [web UI sign-in](#web-ui-sign-in), the UI uses the same access control as the existing UI: [basic auth](server-configuration.md#web-basic-auth) when enabled, and nothing otherwise. In that case anyone who can reach `/ui` can discard plans, stop jobs, start maintenance windows, and lock applies. Actions reject cross-origin requests, and pages are served with a Content Security Policy that blocks inline scripts and styles. The pull request comment for a discarded plan names the user who discarded it.
+Without [web UI sign-in](#web-ui-sign-in), the UI uses the same access control as the existing UI: [basic auth](server-configuration.md#web-basic-auth) when enabled, and nothing otherwise. In that case anyone who can reach `/ui` can discard plans, stop jobs, start maintenance windows, and lock applies, but nobody can [approve policies](#policy-checks-and-approvals). Actions reject cross-origin requests, and pages are served with a Content Security Policy that blocks inline scripts and styles. The pull request comment for a discarded plan names the user who discarded it.
 
 Locks, the apply lock, and pull request status come from the locking database, so every replica shows the same values. Job lists and logs live in memory on the replica that ran the job and are cleared on restart. With several replicas behind a load balancer, a job page may show "no output" when the request reaches a different replica. The pages are built on the [ADR 0005](/contributing/adr/0005-use-durable-storage-with-one-data-model.md) data model so that durable storage can add history, cluster-wide jobs, and an audit log without changing them.
 
@@ -151,6 +151,22 @@ Starting and ending windows needs the admin role by default. Set `access.permiss
 Maintenance windows are kept in memory on the replica where they were started. They only block commands that replica runs, and they end when it restarts. With several replicas, a webhook that reaches another replica isn't blocked. Durable storage ([ADR 0005](/contributing/adr/0005-use-durable-storage-with-one-data-model.md)) will share them across replicas.
 :::
 
+### Policy checks and approvals
+
+When [policy checking](policy-checking.md) is on, a pull request page has a **Policy checks** panel that lists the projects with failing policy sets, and each checked project has a **Policies** page. The page shows each policy set's result, how many approvals it has and needs, who approved it, who can approve it, and the policy tool's output. The overview lists pull requests waiting for a policy approval, and the **Needs policy approval** filter on the pull request list finds them.
+
+Approval counts come from the pull request status in the locking database, so every replica shows them. An approval given for an earlier failure is listed but no longer counts, as with `atlantis approve_policies`. The policy output is read from the `-policyout.json` file the policy check step writes in the project's clone (see [data for custom run steps](policy-checking.md#data-for-custom-run-steps)), and is used only when it is a regular file in the clone that is no older than the saved plan. Other replicas, and every replica once the plan is applied or the pull request closes, show it as unavailable; the pull request comment still has it.
+
+A policy owner can approve from the UI: **Approve policies** on the pull request page approves every failing set they own, **Approve all** on a **Policies** page approves the sets of that project, and **Approve** on a set approves only that set. Each one asks for confirmation, then comments on the pull request with who approved and the equivalent command, and runs `atlantis approve_policies` with the same flags (`-p` or `-d` and `-w`, and `--policy-set`) as that GitHub user. The command checks ownership again with GitHub, records the approval, updates the commit status, and comments the result, exactly as when the person comments the command.
+
+Approving from the UI needs all of:
+
+- The `approve_policies` permission, operator by default. Set `access.permissions.approve_policies`, or `permissions.approve_policies` on a `repos` entry, to change that (see [the access policy](#access-policy-in-the-server-side-repo-config)).
+- [GitHub sign-in](#github) on the same host as the repository. Policy owners are GitHub users and teams, so Atlantis approves as the GitHub login you signed in with. Your teams come from your session; Atlantis keeps the `github:ORG/TEAM` groups for teams named in `policies.owners` or a policy set's `owners`.
+- Being a policy owner: a user or team in `policies.owners`, which approves every set, or in the set's own `owners`. Authors can't approve a set with `prevent_self_approve`, and an owner's approval counts once.
+
+The UI explains which of these is missing. People who signed in with an OpenID Connect provider or a proxy have no GitHub login, so they can't approve from the UI. Without web sign-in, including with basic auth, nobody can approve from the UI, because Atlantis can't tell which policy owner someone is; comment `atlantis approve_policies` on the pull request instead. Approving from the UI works only for GitHub repositories.
+
 To disable the new UI, remove `web-ui` from `experiments` and restart. Routes under `/ui` then return HTTP 404.
 
 ### Web UI plan details
@@ -175,7 +191,7 @@ Web UI sign-in replaces basic auth for the pages at `/ui` with your identity pro
 | Role | Can |
 | --- | --- |
 | Viewer | See pull requests, plans, locks, and job logs |
-| Operator | Also discard plans, unlock projects, and stop running jobs |
+| Operator | Also discard plans, unlock projects, stop running jobs, and approve failing policies they own |
 | Admin | Also start and end maintenance windows, and lock and unlock applies for every repository |
 
 Roles come from [`--web-role-admins`](server-configuration.md#web-role-admins), [`--web-role-operators`](server-configuration.md#web-role-operators), and [`--web-role-viewers`](server-configuration.md#web-role-viewers). Each rule is `group:NAME` (or a bare `NAME`) for your identity provider's groups, `github:ORG` or `github:ORG/TEAM` for GitHub, `email:ADDRESS`, `domain:example.com`, or `*` for everyone who signed in. Email and domain rules only match emails the provider marks as verified. The highest matching role wins. People who match no rule are turned away unless you set [`--web-role-default`](server-configuration.md#web-role-default). Atlantis refuses to start with sign-in enabled and no role rules.
@@ -208,6 +224,7 @@ access:
     view: viewer
     unlock: operator
     stop_job: operator
+    approve_policies: operator          # policy owners only, with GitHub sign-in
     maintenance: admin
     lock_applies: admin
   enforce_in_pr_comments: true          # also check "atlantis unlock" comments
@@ -219,6 +236,7 @@ repos:
       permissions:
         unlock: admin                   # stricter on production repos
         stop_job: admin
+        approve_policies: admin
   - id: github.com/acme/data-lake
     access:
       roles:
@@ -227,7 +245,7 @@ repos:
 ```
 
 - Each rule matches exactly one of `group`, `github` (`ORG` or `ORG/TEAM`), `github_user`, `email`, `domain`, or `everyone: true`.
-- A `repos` entry can grant extra roles for matching repositories and require a different role to unlock or to stop jobs there. Viewing, maintenance windows, and the apply lock cover the whole server, so they are set only at the top level. When several entries match, the last one that sets a requirement wins, as with other repo settings.
+- A `repos` entry can grant extra roles for matching repositories and require a different role to unlock, to stop jobs, or to approve policies there. Viewing, maintenance windows, and the apply lock cover the whole server, so they are set only at the top level. When several entries match, the last one that sets a requirement wins, as with other repo settings.
 - With `enforce_in_pr_comments: true`, an `atlantis unlock` comment is checked against the same unlock rule, matching the commenter's GitHub user and teams. Identity provider groups and emails don't apply to comments.
 - When sign-in is on, the existing UI's pages redirect to the new UI, and its unlock and apply lock actions follow this policy too.
 - The **Access** page in the UI shows the policy in plain words and what you can do in each repository. Atlantis checks the policy at startup and refuses to start with mistakes such as a rule with two attributes or an unknown role.
@@ -322,7 +340,7 @@ ATLANTIS_WEB_PROXY_TRUSTED_CIDRS=10.0.0.0/8
 
 A sign-in lasts [`--web-session-lifetime`](server-configuration.md#web-session-lifetime), 4 hours by default. The role is decided at sign-in and kept for the whole session, so someone removed from a group keeps their role until the session ends. Signing out clears the session in that browser only. To end every session at once, for example after removing an administrator, replace all session secrets and restart. Session cookies are `Secure` unless Atlantis runs on `localhost` over plain http.
 
-Sign-ins, sign-outs, denials, and every action are logged with the user, provider, and role; discarded-plan comments on pull requests name the user. When a sign-in fails for a reason the user can't fix, the page shows a short reference that matches the detailed log entry.
+Sign-ins, sign-outs, denials, and every action are logged with the user, provider, and role; discarded-plan and policy approval comments on pull requests name the user. When a sign-in fails for a reason the user can't fix, the page shows a short reference that matches the detailed log entry.
 
 ### Web UI graduation checklist
 

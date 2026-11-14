@@ -40,6 +40,7 @@ type GitHubConfig struct {
 // registers a GitHub organization from matching another provider's group.
 type GitHubProvider struct {
 	cfg     GitHubConfig
+	host    string
 	webBase string
 	apiBase string
 }
@@ -63,7 +64,7 @@ func NewGitHubProvider(cfg GitHubConfig) (*GitHubProvider, error) {
 	if host == "" {
 		host = "github.com"
 	}
-	p := &GitHubProvider{cfg: cfg}
+	p := &GitHubProvider{cfg: cfg, host: strings.ToLower(host)}
 	switch {
 	case cfg.BaseURLOverride != "":
 		p.webBase = strings.TrimRight(cfg.BaseURLOverride, "/")
@@ -80,6 +81,9 @@ func NewGitHubProvider(cfg GitHubConfig) (*GitHubProvider, error) {
 	}
 	return p, nil
 }
+
+// Hostname is the GitHub host people sign in to, such as github.com.
+func (p *GitHubProvider) Hostname() string { return p.host }
 
 func (p *GitHubProvider) ID() string   { return "github" }
 func (p *GitHubProvider) Name() string { return "GitHub" }

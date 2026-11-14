@@ -1,0 +1,280 @@
+// Copyright 2026 The Atlantis Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package webui
+
+import (
+	"fmt"
+	"strings"
+)
+
+type policiesData struct {
+	Pull     PullRequest
+	Project  Project
+	Policies ProjectPolicies
+	Approval approvalView
+}
+
+// policySetState is the pill for one policy set.
+func policySetState(s PolicySet) (tone, string) {
+	switch {
+	case s.Passed:
+		return toneOK, "Passed"
+	case s.Cleared():
+		return toneOK, "Approved"
+	case !s.Configured:
+		return toneBad, "Failed"
+	}
+	return toneWarn, "Failed"
+}
+
+// policySummary describes a project's policy sets in a few words.
+func policySummary(sets []PolicySet) string {
+	failing, approved := 0, 0
+	for _, s := range sets {
+		switch {
+		case !s.Cleared():
+			failing++
+		case !s.Passed:
+			approved++
+		}
+	}
+	switch {
+	case failing > 0:
+		return fmt.Sprintf("%d of %d policy %s need approval", failing, len(sets), plural(len(sets), "set", "sets"))
+	case approved > 0:
+		return fmt.Sprintf("Policies approved (%d of %d %s)", approved, len(sets), plural(len(sets), "set", "sets"))
+	}
+	return "Policies passed"
+}
+
+func approvalCount(s PolicySet) string {
+	if !s.Configured {
+		return fmt.Sprintf("%d current %s; required count unknown", s.CurrentApprovals(), plural(s.CurrentApprovals(), "approval", "approvals"))
+	}
+	return fmt.Sprintf("%d of %d %s", s.CurrentApprovals(), s.Required, plural(s.Required, "approval", "approvals"))
+}
+
+func approveHref(base string, p PullRequest) string {
+	href, _, _ := strings.Cut(pullHref(base, p.Repo, p.Num), "?")
+	return href + "/policies/approve"
+}
+
+func policyOutputNote(st PolicyOutputStatus) string {
+	switch st {
+	case PolicyOutputOutdated:
+		return "The policy output on this replica is from an earlier plan, so it isn't shown. Run atlantis plan again to check the policies."
+	case PolicyOutputUnreadable:
+		return "The policy output on this replica couldn't be read. Open the job log or the pull request comment to see it."
+	}
+	return "This replica has no policy output for the current plan. It's kept in the working directory of the replica that ran the policy check until the plan is applied or the pull request closes. Open the pull request comment to see it."
+}
+
+templ policySummaryText(proj Project) {
+	{ policySummary(proj.Policies) }
+}
+
+// approveControl approves failing policies after listing what it approves.
+// ref nil approves in every project; set empty approves every failing set.
+templ approveControl(m meta, p PullRequest, ref *ProjectRef, set string, login string, sets []string, label string) {
+	<details class="confirm approve">
+		<summary class="btn sm">{ label }</summary>
+		<form method="post" action={ templ.SafeURL(approveHref(m.Base, p)) } class="inline-confirm">
+			<input type="hidden" name="host" value={ p.Repo.VCSHost }/>
+			if ref != nil {
+				<input type="hidden" name="scope" value="project"/>
+				<input type="hidden" name="dir" value={ ref.Dir }/>
+				<input type="hidden" name="workspace" value={ ref.Workspace }/>
+				<input type="hidden" name="project" value={ ref.Name }/>
+			}
+			if set != "" {
+				<input type="hidden" name="policy_set" value={ set }/>
+			}
+			<span>Atlantis runs atlantis approve_policies as GitHub user { login } and comments on the pull request. It approves:</span>
+			<ul class="lock-names">
+				for _, s := range sets {
+					<li>{ s }</li>
+				}
+			</ul>
+			<button class="btn sm solid" type="submit">Approve as { login }</button>
+		</form>
+	</details>
+}
+
+// approvalNotes explains why sets can't be approved by this person.
+templ approvalNotes(a approvalView) {
+	if !a.Allowed {
+		<p class="capnote">Approving policies here needs the { a.NeedRole.String() } role. Ask an administrator for access, or ask a policy owner to approve.</p>
+	} else if a.Blocked != "" {
+		<p class="capnote">{ a.Blocked }</p>
+	} else {
+		for _, d := range a.Sets {
+			if !d.CanApprove {
+				<p class="capnote">{ d.Reason }</p>
+			}
+		}
+	}
+}
+
+// pullPolicies is the policy summary on the pull request page.
+templ pullPolicies(m meta, p PullRequest, a approvalView) {
+	{{ checked, failing := 0, 0 }}
+	for _, proj := range p.Projects {
+		if len(proj.Policies) > 0 {
+			{{ checked++ }}
+		}
+		if proj.PolicyFailing() {
+			{{ failing++ }}
+		}
+	}
+	if checked > 0 {
+		<section class="panel" id="policies" aria-labelledby="pol-h">
+			<header>
+				<h2 id="pol-h">Policy checks</h2>
+				if failing > 0 {
+					<span class="muted">{ itoa(failing) } of { itoa(checked) } { plural(checked, "project needs", "projects need") } approval</span>
+				} else {
+					<span class="muted">{ itoa(checked) } { plural(checked, "project", "projects") } checked</span>
+				}
+				if a.Allowed && a.Blocked == "" && len(a.Approvable()) > 0 {
+					<span class="right">
+						@approveControl(m, p, nil, "", a.Login, a.Approvable(), "Approve policies…")
+					</span>
+				}
+			</header>
+			if failing == 0 {
+				<p class="empty">Every policy set passed or has enough approvals.</p>
+			} else {
+				<ul class="att">
+					for _, proj := range p.Projects {
+						if proj.PolicyFailing() {
+							<li>
+								<span class="sev warn"></span>
+								<div><p>{ projectLabel(proj) }</p><small>Failing: { strings.Join(proj.FailingPolicySets(), ", ") }</small></div>
+								<a class="btn sm" href={ templ.SafeURL(policiesHref(m.Base, p.Repo, p.Num, proj.Ref())) }>Review</a>
+							</li>
+						}
+					}
+				</ul>
+				@approvalNotes(a)
+			}
+		</section>
+	}
+}
+
+templ policiesPage(m meta, d policiesData) {
+	{{ pp := d.Policies }}
+	@layout(m) {
+		<div class="prhead">
+			<h1 class="mono">{ projectLabel(d.Project) }</h1>
+			<div class="prmeta">
+				@statePill(d.Project.State)
+				<a href={ templ.SafeURL(pullHref(m.Base, d.Pull.Repo, d.Pull.Num)) }>{ d.Pull.Repo.FullName } #{ itoa(d.Pull.Num) }</a>
+				<span class="mono">{ d.Project.Dir }</span>
+				<span>workspace { d.Project.Workspace }</span>
+				if !pp.CheckedAt.IsZero() {
+					<span>Checked { ago(m.Now, pp.CheckedAt) }</span>
+				}
+				if d.Project.LatestJobID != "" {
+					<a href={ templ.SafeURL(jobHref(m.Base, d.Project.LatestJobID)) }>View log</a>
+				}
+				if d.Approval.Allowed && d.Approval.Blocked == "" && len(d.Approval.Approvable()) > 1 {
+					{{ ref := d.Project.Ref() }}
+					<span class="grow-right">
+						@approveControl(m, d.Pull, &ref, "", d.Approval.Login, d.Approval.Approvable(), "Approve all…")
+					</span>
+				}
+			</div>
+		</div>
+		if len(pp.Sets) == 0 {
+			<section class="panel" id="policies-none">
+				<header><h2>No policy check</h2></header>
+				<p class="empty">Atlantis hasn't checked policies for this project's current plan. Policy checks run after a plan when the server has policies configured.</p>
+			</section>
+		} else {
+			<section class="panel" id="policy-summary" aria-labelledby="ps-h">
+				<header><h2 id="ps-h">{ policySummary(pp.Sets) }</h2></header>
+				<dl class="kv">
+					<dt>Top-level policy owners</dt>
+					<dd>
+						if pp.Admins.Empty() {
+							<span class="muted">None. Only each set's owners can approve it.</span>
+						} else {
+							{ ownersText(pp.Admins) } <span class="muted">· can approve every set</span>
+						}
+					</dd>
+					<dt>You</dt>
+					<dd>
+						if d.Approval.Login != "" {
+							GitHub user <span class="mono">{ d.Approval.Login }</span>
+						} else {
+							<span class="muted">Not mapped to a GitHub user</span>
+						}
+					</dd>
+				</dl>
+				if d.Project.PolicyFailing() {
+					@approvalNotes(d.Approval)
+				}
+			</section>
+			for _, s := range pp.Sets {
+				{{ t, label := policySetState(s) }}
+				<section class="panel policy-set" aria-label={ "Policy set " + s.Name }>
+					<header>
+						<h2 class="mono">{ s.Name }</h2>
+						@pill(t, label)
+						if !s.Passed {
+							<span class="muted">{ approvalCount(s) }</span>
+						}
+						if d.Approval.CanApprove(s.Name) {
+							{{ ref := d.Project.Ref() }}
+							<span class="right">
+								@approveControl(m, d.Pull, &ref, s.Name, d.Approval.Login, []string{s.Name}, "Approve…")
+							</span>
+						}
+					</header>
+					<dl class="kv">
+						<dt>Owners</dt>
+						<dd>
+							if !s.Configured {
+								<span class="muted">Unknown. This policy set is no longer in the server-side repo config.</span>
+							} else if s.Owners.Empty() {
+								<span class="muted">Only top-level policy owners</span>
+							} else {
+								{ ownersText(s.Owners) }
+							}
+						</dd>
+						if s.PreventSelfApprove {
+							<dt>Author</dt><dd>{ orUnknown(d.Pull.Author) } can't approve this set</dd>
+						}
+						if len(s.Approvals) > 0 {
+							<dt>Approved by</dt>
+							<dd>
+								<ul class="lock-names">
+									for _, a := range s.Approvals {
+										<li>
+											{ a.By }
+											if !a.Current {
+												<span class="muted">· for an earlier failure, no longer counts</span>
+											}
+										</li>
+									}
+								</ul>
+							</dd>
+						}
+					</dl>
+					if pp.Output == PolicyOutputReady && s.Output != "" {
+						<details class="policy-output" open?={ !s.Cleared() }>
+							<summary>Policy output</summary>
+							<pre class="snippet mono">{ s.Output }</pre>
+						</details>
+					}
+				</section>
+			}
+			if pp.Output != PolicyOutputReady {
+				@capabilityNote(policyOutputNote(pp.Output))
+			} else if !m.Caps.SharedPolicyOutput {
+				@capabilityNote("Policy output is read from the working directory of the replica that ran the policy check. Other replicas can't show it, and it's gone once the plan is applied or the pull request closes. Approvals are stored with the pull request status and show on every replica.")
+			}
+		}
+	}
+}

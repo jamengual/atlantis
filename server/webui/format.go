@@ -83,7 +83,7 @@ func matchesFilter(p PullRequest, filter string) bool {
 	case "failed":
 		return st == StatePlanFailed || st == StateApplyFailed
 	case "policy":
-		return st == StatePolicyFailed
+		return st == StatePolicyFailed || p.PolicyFailing()
 	}
 	return true
 }
@@ -159,10 +159,15 @@ func needsAttention(now time.Time, pulls []PullRequest, locks []Lock, base strin
 		href := pullHref(base, p.Repo, p.Num)
 		name := fmt.Sprintf("%s #%d", p.Repo.FullName, p.Num)
 		for _, proj := range p.Projects {
-			switch proj.State {
-			case StatePlanFailed, StateApplyFailed:
+			switch {
+			case proj.State == StatePlanFailed || proj.State == StateApplyFailed:
 				bad = append(bad, attentionItem{toneBad, fmt.Sprintf("%s: %s in %s", name, lowerFirst(describeState(proj.State).Label), projectLabel(proj)), "Open the log to see the error.", href, "View"})
-			case StatePolicyFailed:
+			case proj.PolicyFailing():
+				sets := proj.FailingPolicySets()
+				warn = append(warn, attentionItem{toneWarn, fmt.Sprintf("%s is waiting for a policy approval in %s", name, projectLabel(proj)),
+					fmt.Sprintf("Failing %s: %s. A policy owner can approve, or update the code and plan again.", plural(len(sets), "policy set", "policy sets"), strings.Join(sets, ", ")),
+					policiesHref(base, p.Repo, p.Num, proj.Ref()), "Review"})
+			case proj.State == StatePolicyFailed:
 				warn = append(warn, attentionItem{toneWarn, fmt.Sprintf("%s is waiting for a policy approval in %s", name, projectLabel(proj)), "Approve the policies or update the code, then plan again.", href, "Review"})
 			}
 		}

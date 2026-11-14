@@ -179,3 +179,44 @@ func TestPolicy_Maintenance(t *testing.T) {
 	Equals(t, webauth.ActionMaintenance, relaxed.Summarize().Requirements[3].Action)
 	Equals(t, webauth.RoleOperator, relaxed.Summarize().Requirements[3].Role)
 }
+
+func TestPolicy_ApprovePolicies(t *testing.T) {
+	p, err := webauth.NewPolicy(webauth.PolicyConfig{
+		Access: &valid.Access{
+			Roles: valid.AccessRoles{
+				Admin:    []valid.AccessRule{{Group: "platform-admins"}},
+				Operator: []valid.AccessRule{{GitHub: "acme/sre"}},
+				Viewer:   []valid.AccessRule{{Domain: "acme.com"}},
+			},
+		},
+		Repos: []valid.Repo{
+			{IDRegex: regexp.MustCompile(`^github\.com/acme/prod-`), Access: &valid.RepoAccess{Permissions: valid.AccessPermissions{ApprovePolicies: "admin"}}},
+			{ID: "github.com/acme/sandbox", Access: &valid.RepoAccess{Permissions: valid.AccessPermissions{ApprovePolicies: "viewer"}}},
+		},
+		PolicyOwnerTeams: []string{"Sec"},
+	})
+	Ok(t, err)
+	viewer := webauth.Subject{Email: "v@acme.com"}
+	sre := webauth.Subject{Groups: []string{"github:acme/sre"}}
+	admin := webauth.Subject{Groups: []string{"platform-admins"}}
+	Assert(t, webauth.ActionApprovePolicies.PerRepo(), "approving is per repo")
+	Equals(t, webauth.RoleOperator, p.Requires(webauth.ActionApprovePolicies, ""))
+	Assert(t, p.Allows(sre, webauth.RoleNone, webauth.ActionApprovePolicies, "github.com/acme/infra"), "operators approve by default")
+	Assert(t, !p.Allows(viewer, webauth.RoleNone, webauth.ActionApprovePolicies, "github.com/acme/infra"), "viewers don't")
+	Assert(t, !p.Allows(sre, webauth.RoleNone, webauth.ActionApprovePolicies, "github.com/acme/prod-db"), "prod needs admin")
+	Assert(t, p.Allows(admin, webauth.RoleNone, webauth.ActionApprovePolicies, "github.com/acme/prod-db"), "admins approve prod")
+	Assert(t, p.Allows(viewer, webauth.RoleNone, webauth.ActionApprovePolicies, "github.com/acme/sandbox"), "the sandbox relaxes it")
+	// The approve requirement doesn't change unlocking.
+	Equals(t, webauth.RoleOperator, p.Requires(webauth.ActionUnlock, "github.com/acme/prod-db"))
+	Equals(t, "Approve failing policy checks, for policy owners", webauth.ActionApprovePolicies.Describe())
+
+	s := p.Summarize()
+	Equals(t, webauth.ActionApprovePolicies, s.Requirements[4].Action)
+	Equals(t, webauth.RoleAdmin, s.Repos[0].ApprovePolicies)
+	Equals(t, webauth.RoleViewer, s.Repos[1].ApprovePolicies)
+
+	// Sessions keep GitHub teams that own policy sets, in any org, so the UI
+	// can match them; other unmentioned groups are dropped.
+	Equals(t, []string{"github:acme/sre", "github:acme/sec", "github:other/SEC"},
+		p.RelevantGroups([]string{"github:acme/sre", "github:acme/sec", "github:other/SEC", "github:acme/web", "github:sec", "sec"}))
+}

@@ -25,6 +25,7 @@ import (
 //	  permissions:
 //	    unlock: operator
 //	    stop_job: operator
+//	    approve_policies: operator
 //	    maintenance: admin
 //	    lock_applies: admin
 //	  enforce_in_pr_comments: true
@@ -36,8 +37,8 @@ type Access struct {
 }
 
 // RepoAccess is the per-repo access policy under a repos entry. It grants
-// roles for the matching repos and can require a different role to unlock
-// or to stop jobs.
+// roles for the matching repos and can require a different role to unlock,
+// to stop jobs, or to approve policies.
 type RepoAccess struct {
 	Roles       AccessRoles        `yaml:"roles" json:"roles,omitzero"`
 	Permissions *AccessPermissions `yaml:"permissions,omitempty" json:"permissions,omitempty"`
@@ -65,6 +66,9 @@ type AccessPermissions struct {
 	LockApplies string `yaml:"lock_applies,omitempty" json:"lock_applies,omitempty"`
 	StopJob     string `yaml:"stop_job,omitempty" json:"stop_job,omitempty"`
 	Maintenance string `yaml:"maintenance,omitempty" json:"maintenance,omitempty"`
+	// ApprovePolicies is the role needed to approve failing policies from
+	// the web UI. The person must also be a policy owner.
+	ApprovePolicies string `yaml:"approve_policies,omitempty" json:"approve_policies,omitempty"`
 }
 
 var accessRoleNames = []string{"none", "viewer", "operator", "admin"}
@@ -123,7 +127,7 @@ func (a Access) Validate() error {
 		return err
 	}
 	if a.Permissions != nil {
-		for _, p := range []struct{ name, value string }{{"view", a.Permissions.View}, {"unlock", a.Permissions.Unlock}, {"stop_job", a.Permissions.StopJob}, {"maintenance", a.Permissions.Maintenance}, {"lock_applies", a.Permissions.LockApplies}} {
+		for _, p := range []struct{ name, value string }{{"view", a.Permissions.View}, {"unlock", a.Permissions.Unlock}, {"stop_job", a.Permissions.StopJob}, {"approve_policies", a.Permissions.ApprovePolicies}, {"maintenance", a.Permissions.Maintenance}, {"lock_applies", a.Permissions.LockApplies}} {
 			if err := validRoleName("access.permissions."+p.name, p.value); err != nil {
 				return err
 			}
@@ -153,7 +157,7 @@ func (a RepoAccess) Validate(repoID string) error {
 	if a.Permissions.Maintenance != "" {
 		return fmt.Errorf("%s.permissions.maintenance: maintenance windows are managed for every repo; set it in the top-level access section", where)
 	}
-	for _, p := range []struct{ name, value string }{{"unlock", a.Permissions.Unlock}, {"stop_job", a.Permissions.StopJob}} {
+	for _, p := range []struct{ name, value string }{{"unlock", a.Permissions.Unlock}, {"stop_job", a.Permissions.StopJob}, {"approve_policies", a.Permissions.ApprovePolicies}} {
 		if err := validRoleName(where+".permissions."+p.name, p.value); err != nil {
 			return err
 		}
@@ -187,11 +191,12 @@ func (p *AccessPermissions) toValid() valid.AccessPermissions {
 		return valid.AccessPermissions{}
 	}
 	return valid.AccessPermissions{
-		View:        strings.ToLower(p.View),
-		Unlock:      strings.ToLower(p.Unlock),
-		LockApplies: strings.ToLower(p.LockApplies),
-		StopJob:     strings.ToLower(p.StopJob),
-		Maintenance: strings.ToLower(p.Maintenance),
+		View:            strings.ToLower(p.View),
+		Unlock:          strings.ToLower(p.Unlock),
+		LockApplies:     strings.ToLower(p.LockApplies),
+		StopJob:         strings.ToLower(p.StopJob),
+		Maintenance:     strings.ToLower(p.Maintenance),
+		ApprovePolicies: strings.ToLower(p.ApprovePolicies),
 	}
 }
 

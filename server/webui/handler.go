@@ -143,6 +143,7 @@ func (h *Handler) Register(r *mux.Router) {
 	ui.Handle("/pulls", view(h.pulls)).Methods(http.MethodGet)
 	ui.Handle("/repos/{repo:.+}/pulls/{num:[0-9]+}", view(h.pull)).Methods(http.MethodGet)
 	ui.Handle("/repos/{repo:.+}/pulls/{num:[0-9]+}/plan", view(h.plan)).Methods(http.MethodGet)
+	ui.Handle("/repos/{repo:.+}/pulls/{num:[0-9]+}/policies", view(h.policies)).Methods(http.MethodGet)
 	ui.Handle("/locks", view(h.locks)).Methods(http.MethodGet)
 	ui.Handle("/jobs", view(h.jobs)).Methods(http.MethodGet)
 	ui.Handle("/jobs/{id}", view(h.job)).Methods(http.MethodGet)
@@ -156,6 +157,9 @@ func (h *Handler) Register(r *mux.Router) {
 	ui.Handle("/applies/unlock", csrf.Handler(h.guard(webauth.ActionLockApplies, h.unlockApplies))).Methods(http.MethodPost)
 	ui.Handle("/maintenance", csrf.Handler(h.guard(webauth.ActionMaintenance, h.startMaintenance))).Methods(http.MethodPost)
 	ui.Handle("/maintenance/{id}/end", csrf.Handler(h.guard(webauth.ActionMaintenance, h.endMaintenance))).Methods(http.MethodPost)
+	// Approving is checked against the pull request's repository, and the
+	// person must be a policy owner.
+	ui.Handle("/repos/{repo:.+}/pulls/{num:[0-9]+}/policies/approve", csrf.Handler(h.guard(webauth.ActionView, h.approvePolicies))).Methods(http.MethodPost)
 	// Stopping is checked per job, against the job's repository. Keep this
 	// route last: with gorilla/mux, a later route can turn a GET's 405 here
 	// into a 404.
@@ -403,7 +407,7 @@ func (h *Handler) pull(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, "locks", err)
 		return
 	}
-	d := pullData{Pull: *p}
+	d := pullData{Pull: *p, Approval: h.pullApproval(r, *p)}
 	for _, l := range locks {
 		if lockHeldBy(l, p.Repo, p.Num) {
 			d.Locks = append(d.Locks, l)
@@ -524,16 +528,18 @@ func (h *Handler) replica(w http.ResponseWriter, r *http.Request) {
 
 // flash messages are chosen by key so a link can't inject arbitrary text.
 var flashes = map[string]string{
-	"applies-locked":   "Applies locked. Every atlantis apply fails until applies are unlocked.",
-	"applies-unlocked": "Applies unlocked.",
-	"none-selected":    "Select at least one lock to unlock.",
-	"stop-requested":   "Stop requested. Terraform got an interrupt and stops once the operations in progress finish, then releases its state lock. The pull request shows the job as failed.",
-	"already-stopping": "Someone already stopped this job. It ends once Terraform exits.",
-	"stop-finished":    "That job had already finished, so there was nothing to stop.",
-	"no-pull-locks":    "That pull request holds no locks now, so nothing was unlocked.",
-	"maint-started":    "Maintenance window started. Atlantis on this replica rejects the frozen commands and comments with your reason.",
-	"maint-ended":      "Maintenance window ended. Commands run again.",
-	"maint-gone":       "That maintenance window had already ended.",
+	"applies-locked":     "Applies locked. Every atlantis apply fails until applies are unlocked.",
+	"applies-unlocked":   "Applies unlocked.",
+	"none-selected":      "Select at least one lock to unlock.",
+	"stop-requested":     "Stop requested. Terraform got an interrupt and stops once the operations in progress finish, then releases its state lock. The pull request shows the job as failed.",
+	"already-stopping":   "Someone already stopped this job. It ends once Terraform exits.",
+	"stop-finished":      "That job had already finished, so there was nothing to stop.",
+	"no-pull-locks":      "That pull request holds no locks now, so nothing was unlocked.",
+	"maint-started":      "Maintenance window started. Atlantis on this replica rejects the frozen commands and comments with your reason.",
+	"maint-ended":        "Maintenance window ended. Commands run again.",
+	"maint-gone":         "That maintenance window had already ended.",
+	"policies-approving": "Approval started. Atlantis runs atlantis approve_policies as you and comments the result on the pull request. Reload this page in a moment to see the approvals.",
+	"policies-clear":     "Those policies already passed or have enough approvals, so there was nothing to approve.",
 }
 
 func flashMessage(q url.Values) string {
@@ -1142,12 +1148,14 @@ func (h *Handler) access(w http.ResponseWriter, r *http.Request) {
 		}
 		seen[id] = true
 		d.Repos = append(d.Repos, repoAccess{
-			ID:         id,
-			Role:       max(p.Base, pol.RoleIn(p.AsSubject(), id)),
-			NeedUnlock: pol.Requires(webauth.ActionUnlock, id),
-			CanUnlock:  h.allows(r, webauth.ActionUnlock, id),
-			NeedStop:   pol.Requires(webauth.ActionStopJob, id),
-			CanStop:    h.allows(r, webauth.ActionStopJob, id),
+			ID:          id,
+			Role:        max(p.Base, pol.RoleIn(p.AsSubject(), id)),
+			NeedUnlock:  pol.Requires(webauth.ActionUnlock, id),
+			CanUnlock:   h.allows(r, webauth.ActionUnlock, id),
+			NeedStop:    pol.Requires(webauth.ActionStopJob, id),
+			CanStop:     h.allows(r, webauth.ActionStopJob, id),
+			NeedApprove: pol.Requires(webauth.ActionApprovePolicies, id),
+			CanApprove:  h.allows(r, webauth.ActionApprovePolicies, id),
 		})
 	}
 	if pulls, err := h.Store.ListPulls(ctx); err == nil {
