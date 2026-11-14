@@ -38,8 +38,11 @@ type Config struct {
 	SessionSecrets []string
 	// SessionLifetime is how long a sign-in lasts. Defaults to 4 hours.
 	SessionLifetime time.Duration
-	Roles           RoleMapper
-	Providers       []LoginProvider
+	// Roles are the role rules from server flags. They are combined with
+	// Policy when both are set; Policy alone carries the repo config rules.
+	Roles     RoleMapper
+	Policy    *Policy
+	Providers []LoginProvider
 	// Proxy, when set, takes the identity from an authenticating proxy
 	// instead of a sign-in page.
 	Proxy  *ProxyAuthenticator
@@ -100,8 +103,12 @@ func NewManager(cfg Config) (*Manager, error) {
 	if cfg.Proxy == nil && len(cfg.Providers) == 0 {
 		return nil, errors.New("web sign-in needs at least one provider or an authenticating proxy")
 	}
-	if err := cfg.Roles.Validate(); err != nil {
-		return nil, err
+	if cfg.Policy == nil {
+		policy, err := NewPolicy(PolicyConfig{Flags: cfg.Roles})
+		if err != nil {
+			return nil, err
+		}
+		cfg.Policy = policy
 	}
 	if cfg.SessionLifetime <= 0 {
 		cfg.SessionLifetime = DefaultSessionLifetime
@@ -119,6 +126,9 @@ func NewManager(cfg Config) (*Manager, error) {
 	}
 	return m, nil
 }
+
+// Policy is the access policy roles and permissions come from.
+func (m *Manager) Policy() *Policy { return m.cfg.Policy }
 
 // UsesProxy reports whether identities come from an authenticating proxy.
 func (m *Manager) UsesProxy() bool { return m.cfg.Proxy != nil }
@@ -153,6 +163,8 @@ func (m *Manager) Authenticate(r *http.Request) *Principal {
 	if err := m.keys.Open(sessionPurpose, c.Value, m.cfg.Now(), &p); err != nil {
 		return nil
 	}
+	// Recompute the role so policy changes apply without signing in again.
+	p.Role = m.cfg.Policy.GlobalRole(p.AsSubject())
 	return &p
 }
 
@@ -163,10 +175,12 @@ func (m *Manager) principal(id Identity, provider string) *Principal {
 			return strings.HasPrefix(strings.ToLower(g), GitHubGroupPrefix)
 		})
 	}
-	p := &Principal{Subject: id.Subject, Name: id.Name, Provider: provider, Role: m.cfg.Roles.Resolve(id)}
+	p := &Principal{Subject: id.Subject, Name: id.Name, Provider: provider, GitHubLogin: id.Login}
 	if id.EmailVerified {
 		p.Email = id.Email
 	}
+	p.Groups = m.cfg.Policy.RelevantGroups(id.Groups)
+	p.Role = m.cfg.Policy.GlobalRole(p.AsSubject())
 	return p
 }
 
@@ -325,7 +339,7 @@ func (m *Manager) FinishLogin(w http.ResponseWriter, r *http.Request, providerID
 		return "", nil, err
 	}
 	principal := m.principal(id, providerID)
-	if principal.Role == RoleNone {
+	if !m.cfg.Policy.Allows(principal.AsSubject(), RoleNone, ActionView, "") {
 		m.cfg.Logger.Info("web sign-in denied subject=%q provider=%q reason=%q", principal.Subject, providerID, "no matching role")
 		return "", principal, ErrNoRole
 	}
@@ -334,7 +348,7 @@ func (m *Manager) FinishLogin(w http.ResponseWriter, r *http.Request, providerID
 	if err != nil {
 		return "", nil, err
 	}
-	http.SetCookie(w, m.cookie(sessionCookie, sealed, m.base+"/ui", exp))
+	http.SetCookie(w, m.cookie(sessionCookie, sealed, m.sessionPath(), exp))
 	m.cfg.Logger.Info("web sign-in subject=%q name=%q provider=%q role=%q", principal.Subject, principal.DisplayName(), providerID, principal.Role)
 	return fs.Return, principal, nil
 }
@@ -342,9 +356,15 @@ func (m *Manager) FinishLogin(w http.ResponseWriter, r *http.Request, providerID
 // ErrNoRole means the user signed in but matches no role.
 var ErrNoRole error = &UserError{msg: "your account signed in, but it has no Atlantis role. Ask an administrator to add you to a group that has access"}
 
+// sessionPath scopes the session cookie to Atlantis's base path, so the
+// existing UI's actions, which follow the same policy, receive it too.
+func (m *Manager) sessionPath() string {
+	return m.base + "/"
+}
+
 // Logout clears the session cookie.
 func (m *Manager) Logout(w http.ResponseWriter) {
-	http.SetCookie(w, m.cookie(sessionCookie, "", m.base+"/ui", time.Unix(0, 0)))
+	http.SetCookie(w, m.cookie(sessionCookie, "", m.sessionPath(), time.Unix(0, 0)))
 }
 
 func (m *Manager) cookie(name, value, cookiePath string, exp time.Time) *http.Cookie {

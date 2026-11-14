@@ -10,7 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/runatlantis/atlantis/server/core/config/valid"
 	"github.com/runatlantis/atlantis/server/logging"
+	"github.com/runatlantis/atlantis/server/webauth"
 	. "github.com/runatlantis/atlantis/testing"
 	"github.com/urfave/negroni/v3"
 )
@@ -29,35 +31,35 @@ func TestNewWebAuth(t *testing.T) {
 		WebRoleViewers:      []string{"*"},
 	}
 
-	m, err := newWebAuth(UserConfig{}, public, logger)
+	m, err := webAuthFor(UserConfig{}, public, logger)
 	Ok(t, err)
 	Assert(t, m == nil, "no sign-in configured should return nil")
 
-	m, err = newWebAuth(oidc, public, logger)
+	m, err = webAuthFor(oidc, public, logger)
 	Ok(t, err)
 	Equals(t, "oidc", m.Providers()[0].ID)
 
 	gh := UserConfig{WebSSOProviders: []string{"oidc", "github"}, WebSessionSecrets: []string{testSessionSecret},
 		WebOIDCIssuerURL: "https://login.example.com", WebOIDCClientID: "id", WebOIDCClientSecret: "secret",
 		WebGitHubClientID: "gh", WebGitHubClientSecret: "s", WebGitHubAllowedOrgs: []string{"acme"}, WebRoleDefault: "viewer"}
-	m, err = newWebAuth(gh, public, logger)
+	m, err = webAuthFor(gh, public, logger)
 	Ok(t, err)
 	Equals(t, 2, len(m.Providers()))
 
 	both := UserConfig{WebSSOProviders: []string{"oidc", "google"}, WebSessionSecrets: []string{testSessionSecret},
 		WebOIDCIssuerURL: "https://login.microsoftonline.com/t/v2.0", WebOIDCClientID: "id", WebOIDCClientSecret: "secret",
 		WebGoogleClientID: "g", WebGoogleClientSecret: "gs", WebGoogleAllowedDomains: []string{"acme.com"}, WebRoleViewers: []string{"*"}}
-	m, err = newWebAuth(both, public, logger)
+	m, err = webAuthFor(both, public, logger)
 	Ok(t, err)
 	Equals(t, "oidc", m.Providers()[0].ID)
 	Equals(t, "google", m.Providers()[1].ID)
 	Equals(t, "Google", m.Providers()[1].Name)
 	both.WebGoogleAllowedDomains = nil
-	_, err = newWebAuth(both, public, logger)
+	_, err = webAuthFor(both, public, logger)
 	ErrContains(t, "web-google-allowed-domains", err)
 
 	proxy := UserConfig{WebProxyAuth: "header", WebProxyUserHeader: "X-User", WebProxyTrustedCIDRs: []string{"10.0.0.0/8"}, WebRoleViewers: []string{"*"}}
-	m, err = newWebAuth(proxy, public, logger)
+	m, err = webAuthFor(proxy, public, logger)
 	Ok(t, err)
 	Assert(t, m.UsesProxy(), "proxy mode expected")
 
@@ -82,7 +84,7 @@ func TestNewWebAuth(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := oidc
 			tc.mutate(&c)
-			_, err := newWebAuth(c, public, logger)
+			_, err := webAuthFor(c, public, logger)
 			ErrContains(t, tc.want, err)
 			Assert(t, !strings.Contains(err.Error(), testSessionSecret), "error leaked a secret")
 		})
@@ -101,7 +103,7 @@ func TestNewWebAuth(t *testing.T) {
 	}
 	for _, tc := range badProxy {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := newWebAuth(tc.c, public, logger)
+			_, err := webAuthFor(tc.c, public, logger)
 			ErrContains(t, tc.want, err)
 		})
 	}
@@ -131,10 +133,23 @@ func TestRequestLogger_WebUISignInSkipsBasicAuthOnlyForUI(t *testing.T) {
 	// With web sign-in, /ui authenticates its own users.
 	Equals(t, http.StatusOK, serve(withSignIn, "/ui"))
 	Equals(t, http.StatusOK, serve(withSignIn, "/ui/locks"))
+	// The existing UI's pages and actions move to web sign-in too: pages
+	// redirect to the new UI and actions check the access policy.
+	Equals(t, http.StatusOK, serve(withSignIn, "/"))
+	Equals(t, http.StatusOK, serve(withSignIn, "/locks"))
+	Equals(t, http.StatusOK, serve(withSignIn, "/apply/lock"))
+	Equals(t, http.StatusOK, serve(withSignIn, "/jobs/abc"))
 	// Everything else keeps basic auth.
-	Equals(t, http.StatusUnauthorized, serve(withSignIn, "/"))
-	Equals(t, http.StatusUnauthorized, serve(withSignIn, "/locks"))
 	Equals(t, http.StatusUnauthorized, serve(withSignIn, "/uix"))
+	Equals(t, http.StatusUnauthorized, serve(withSignIn, "/jobs/abc/ws"))
+	Equals(t, http.StatusUnauthorized, serve(withSignIn, "/debug/pprof/"))
+	Equals(t, http.StatusUnauthorized, serve(withSignIn, "/metrics"))
+	Equals(t, http.StatusUnauthorized, serve(withSignIn, "/github-app/setup"))
 	// Without web sign-in, /ui stays behind basic auth.
 	Equals(t, http.StatusUnauthorized, serve(without, "/ui"))
+}
+
+func webAuthFor(c UserConfig, public *url.URL, logger logging.SimpleLogging) (*webauth.Manager, error) {
+	m, _, err := newWebAuth(c, public, logger, valid.GlobalCfg{})
+	return m, err
 }

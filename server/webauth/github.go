@@ -136,7 +136,7 @@ func (p *GitHubProvider) Exchange(ctx context.Context, code, verifier, _, redire
 	if err := p.get(ctx, client, "/user", &user); err != nil {
 		return Identity{}, err
 	}
-	id := Identity{Subject: "github:" + strconv.FormatInt(user.ID, 10), Name: user.Login}
+	id := Identity{Subject: "github:" + strconv.FormatInt(user.ID, 10), Name: user.Login, Login: user.Login}
 	if user.Name != "" {
 		id.Name = user.Name
 	}

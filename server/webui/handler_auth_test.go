@@ -300,3 +300,62 @@ func TestSignIn_InternalErrorsAreNotShown(t *testing.T) {
 		Assert(t, !strings.Contains(string(body), leak), "sign-in page leaked %q", leak)
 	}
 }
+
+// The existing UI's routes follow the same rules when sign-in is on.
+func TestExistingUIRoutesFollowThePolicy(t *testing.T) {
+	idp := webauthtest.NewOIDC()
+	defer idp.Server.Close()
+	var handler http.Handler
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handler.ServeHTTP(w, r) }))
+	defer srv.Close()
+	public, _ := url.Parse(srv.URL)
+	provider, err := webauth.NewOIDCProvider(webauth.OIDCConfig{IssuerURL: idp.Server.URL, ClientID: idp.ClientID, ClientSecret: idp.ClientSecret})
+	Ok(t, err)
+	auth, err := webauth.NewManager(webauth.Config{PublicURL: public, SessionSecrets: []string{sessionSecret}, Providers: []webauth.LoginProvider{provider}, Roles: signInRoles, Logger: logging.NewNoopLogger(t)})
+	Ok(t, err)
+	h := &webui.Handler{Store: sampleStore(), Actions: &fakeActions{}, Logger: logging.NewNoopLogger(t), Auth: auth}
+	called := map[string]int{}
+	legacy := func(name string) http.HandlerFunc {
+		return func(w http.ResponseWriter, _ *http.Request) { called[name]++; w.WriteHeader(http.StatusOK) }
+	}
+	r := mux.NewRouter()
+	h.Register(r)
+	r.Handle("/", h.RedirectToUI(""))
+	r.Handle("/jobs/{job-id}", h.RedirectToUI(""))
+	r.Handle("/locks", h.ProtectUnlock(legacy("unlock"))).Methods(http.MethodDelete)
+	r.Handle("/apply/lock", h.ProtectLockApplies(legacy("lock"))).Methods(http.MethodPost)
+	handler = r
+
+	b := newBrowser(t, srv.URL)
+	for path, want := range map[string]string{"/": "/ui", "/jobs/job-1": "/ui/jobs/job-1"} {
+		resp, err := b.noFollow().Get(srv.URL + path)
+		Ok(t, err)
+		resp.Body.Close()
+		Equals(t, want, resp.Header.Get("Location"))
+	}
+
+	del := func() int {
+		req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/locks?id=acme%2Finfra%2Fnetwork%2Fdefault", nil)
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		resp, err := b.noFollow().Do(req)
+		Ok(t, err)
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	// Signed out: refused.
+	Equals(t, http.StatusUnauthorized, del())
+	Equals(t, http.StatusUnauthorized, b.post(t, "/apply/lock", nil).StatusCode)
+
+	// A viewer can't unlock or lock applies through the existing UI either.
+	signIn(t, b, idp, map[string]any{"sub": "v", "email": "v@acme.com", "email_verified": true})
+	Equals(t, http.StatusForbidden, del())
+	Equals(t, http.StatusForbidden, b.post(t, "/apply/lock", nil).StatusCode)
+	Equals(t, 0, called["unlock"]+called["lock"])
+
+	// An operator can unlock but not lock applies.
+	signIn(t, b, idp, map[string]any{"sub": "o", "groups": []string{"sre"}})
+	Equals(t, http.StatusOK, del())
+	Equals(t, http.StatusForbidden, b.post(t, "/apply/lock", nil).StatusCode)
+	Equals(t, 1, called["unlock"])
+	Equals(t, 0, called["lock"])
+}

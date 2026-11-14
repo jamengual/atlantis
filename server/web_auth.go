@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/runatlantis/atlantis/server/core/config/valid"
 	"github.com/runatlantis/atlantis/server/logging"
 	"github.com/runatlantis/atlantis/server/webauth"
 )
@@ -23,7 +24,34 @@ func (c UserConfig) webSignInConfigured() bool {
 // newWebAuth builds web UI sign-in from the server configuration. It returns
 // nil when no sign-in is configured, in which case the UI keeps using basic
 // auth, or no auth, like the rest of Atlantis.
-func newWebAuth(c UserConfig, publicURL *url.URL, logger logging.SimpleLogging) (*webauth.Manager, error) {
+func newWebAuth(c UserConfig, publicURL *url.URL, logger logging.SimpleLogging, globalCfg valid.GlobalCfg) (*webauth.Manager, *webauth.Policy, error) {
+	policy, err := newAccessPolicy(c, globalCfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	m, err := newWebAuthManager(c, publicURL, logger, policy)
+	return m, policy, err
+}
+
+// newAccessPolicy combines the role flags with the access sections of the
+// server-side repo config.
+func newAccessPolicy(c UserConfig, globalCfg valid.GlobalCfg) (*webauth.Policy, error) {
+	defaultRole, err := webauth.ParseRole(c.WebRoleDefault)
+	if err != nil {
+		return nil, fmt.Errorf("web-role-default: %w", err)
+	}
+	policy, err := webauth.NewPolicy(webauth.PolicyConfig{
+		Flags:  webauth.RoleMapper{Admins: c.WebRoleAdmins, Operators: c.WebRoleOperators, Viewers: c.WebRoleViewers, Default: defaultRole},
+		Access: globalCfg.Access,
+		Repos:  globalCfg.Repos,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("web access policy: %w", err)
+	}
+	return policy, nil
+}
+
+func newWebAuthManager(c UserConfig, publicURL *url.URL, logger logging.SimpleLogging, policy *webauth.Policy) (*webauth.Manager, error) {
 	if !c.webSignInConfigured() {
 		return nil, nil
 	}
@@ -31,15 +59,11 @@ func newWebAuth(c UserConfig, publicURL *url.URL, logger logging.SimpleLogging) 
 		return nil, errors.New("web-sso-providers and web-proxy-auth can't be used together; choose sign-in pages or an authenticating proxy")
 	}
 
-	defaultRole, err := webauth.ParseRole(c.WebRoleDefault)
-	if err != nil {
-		return nil, fmt.Errorf("web-role-default: %w", err)
-	}
-	roles := webauth.RoleMapper{Admins: c.WebRoleAdmins, Operators: c.WebRoleOperators, Viewers: c.WebRoleViewers, Default: defaultRole}
-	if len(roles.Admins)+len(roles.Operators)+len(roles.Viewers) == 0 && defaultRole == webauth.RoleNone {
-		return nil, errors.New("web sign-in has no role rules, so nobody could use the UI; set web-role-admins, web-role-operators, web-role-viewers, or web-role-default")
+	if !policy.HasRules() {
+		return nil, errors.New("web sign-in has no role rules, so nobody could use the UI; add an access section to the server-side repo config, or set web-role-admins, web-role-operators, web-role-viewers, or web-role-default")
 	}
 
+	var err error
 	lifetime := webauth.DefaultSessionLifetime
 	if c.WebSessionLifetime != "" {
 		lifetime, err = time.ParseDuration(c.WebSessionLifetime)
@@ -52,7 +76,7 @@ func newWebAuth(c UserConfig, publicURL *url.URL, logger logging.SimpleLogging) 
 		PublicURL:       publicURL,
 		SessionSecrets:  c.WebSessionSecrets,
 		SessionLifetime: lifetime,
-		Roles:           roles,
+		Policy:          policy,
 		Logger:          logger,
 	}
 

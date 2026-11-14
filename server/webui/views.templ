@@ -5,6 +5,7 @@ package webui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/runatlantis/atlantis/server/webauth"
@@ -19,6 +20,7 @@ type meta struct {
 	Instance Instance
 	Caps      Capabilities
 	Principal *webauth.Principal
+	can       func(webauth.Action, string) bool
 	// SignOut is true when users sign in on Atlantis's own pages.
 	SignOut bool
 	Flash   string
@@ -41,11 +43,25 @@ func (m meta) url(path string) templ.SafeURL {
 	return templ.SafeURL(m.Base + "/ui" + path)
 }
 
-// CanOperate reports whether the user may discard plans and unlock projects.
-func (m meta) CanOperate() bool { return m.Principal.Can(webauth.RoleOperator) }
+// CanUnlock reports whether the user may unlock projects in a repository.
+func (m meta) CanUnlock(repo Repository) bool {
+	return m.can != nil && m.can(webauth.ActionUnlock, repoID(repo))
+}
 
-// CanAdmin reports whether the user may lock and unlock applies.
-func (m meta) CanAdmin() bool { return m.Principal.Can(webauth.RoleAdmin) }
+// CanUnlockAny reports whether the user may unlock at least one of the locks.
+func (m meta) CanUnlockAny(locks []Lock) bool {
+	for _, l := range locks {
+		if m.CanUnlock(l.Repo) {
+			return true
+		}
+	}
+	return false
+}
+
+// CanLockApplies reports whether the user may lock and unlock applies.
+func (m meta) CanLockApplies() bool {
+	return m.can != nil && m.can(webauth.ActionLockApplies, "")
+}
 
 func signedInWith(p *webauth.Principal) string {
 	switch {
@@ -114,6 +130,7 @@ templ layout(m meta) {
 						@navLink(m, "jobs", "/jobs", "Jobs", "jobs", m.Counts.Jobs)
 						<div class="group">Operate</div>
 						@navLink(m, "replica", "/replica", "This replica", "server", 0)
+						@navLink(m, "access", "/access", "Access", "key", 0)
 					</nav>
 					<div class="me">
 						<span class="avatar" aria-hidden="true">{ initials(m.Principal.DisplayName()) }</span>
@@ -168,6 +185,7 @@ templ layout(m meta) {
 				<a href={ m.url("/locks") } data-kind="Page">Locks</a>
 				<a href={ m.url("/jobs") } data-kind="Page">Jobs</a>
 				<a href={ m.url("/replica") } data-kind="Page">This replica</a>
+				<a href={ m.url("/access") } data-kind="Page">Access</a>
 			</template>
 		</body>
 	</html>
@@ -216,6 +234,9 @@ templ icon(name string) {
 				<path d="m20 20-4-4"></path>
 			case "moon":
 				<path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"></path>
+			case "key":
+				<circle cx="8" cy="15" r="4"></circle>
+				<path d="m11 12 9-9M17 6l3 3M14 9l2 2"></path>
 			case "db":
 				<ellipse cx="12" cy="6" rx="7" ry="3"></ellipse>
 				<path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"></path>
@@ -318,7 +339,7 @@ templ applyBanner(m meta, al ApplyLock) {
 				<p><b>Applies are locked for every repository.</b></p>
 				<p class="muted">Locked { ago(m.Now, al.Since) }. Plans still run.</p>
 			</div>
-			if m.CanAdmin() {
+			if m.CanLockApplies() {
 				<form method="post" action={ m.url("/applies/unlock") }>
 					<button class="btn" type="submit">Unlock applies</button>
 				</form>
@@ -328,7 +349,7 @@ templ applyBanner(m meta, al ApplyLock) {
 		<div class="banner">
 			@pill(toneOK, "Applies open")
 			<p class="grow muted">Anyone allowed to apply can run <span class="mono">atlantis apply</span>.</p>
-			if m.CanAdmin() {
+			if m.CanLockApplies() {
 				<details class="confirm">
 					<summary class="btn danger">Lock applies…</summary>
 					<form method="post" action={ m.url("/applies/lock") } class="inline-confirm">
@@ -511,7 +532,7 @@ templ pullPage(m meta, p PullRequest) {
 									@ledger(proj.Changes)
 								</td>
 								<td>
-									if proj.LockID != "" && m.CanOperate() {
+									if proj.LockID != "" && m.CanUnlock(p.Repo) {
 										@unlockControl(m, proj.LockID, string(templ.SafeURL(pullHref(m.Base, p.Repo, p.Num))))
 									} else if proj.LockID != "" {
 										<span class="muted">Locked</span>
@@ -567,7 +588,7 @@ templ locksPage(m meta, d locksData) {
 			<header>
 				<h2>{ itoa(len(d.Locks)) } project locks</h2>
 				<span class="muted">{ itoa(countStale(m.Now, d.Locks)) } look abandoned</span>
-				if len(d.Locks) > 0 && m.CanOperate() {
+				if m.CanUnlockAny(d.Locks) {
 					<span class="right">
 						<details class="confirm">
 							<summary class="btn sm danger">Unlock selected…</summary>
@@ -586,7 +607,7 @@ templ locksPage(m meta, d locksData) {
 						for _, l := range d.Locks {
 							<tr>
 								<td class="pick">
-									if m.CanOperate() {
+									if m.CanUnlock(l.Repo) {
 										<input type="checkbox" class="cb" name="id" value={ l.ID } id={ "sel-" + l.ID } aria-label={ "Select " + l.Dir }/>
 									}
 								</td>
@@ -823,4 +844,150 @@ templ signInPage(d signInData) {
 			</main>
 		</body>
 	</html>
+}
+
+type accessData struct {
+	Summary webauth.Summary
+	SignIn  bool
+	Role    webauth.Role
+	Repos   []repoAccess
+}
+
+type repoAccess struct {
+	ID         string
+	Role       webauth.Role
+	NeedUnlock webauth.Role
+	CanUnlock  bool
+}
+
+func roleLabel(r webauth.Role) string {
+	if r == webauth.RoleNone {
+		return "No access"
+	}
+	s := r.String()
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+templ roleText(r webauth.Role) {
+	<span class={ "role", r.String() }>{ roleLabel(r) }</span>
+}
+
+templ accessPage(m meta, d accessData) {
+	@layout(m) {
+		<div class="head">
+			<div>
+				<h1>Access</h1>
+				<p>Who can do what in Atlantis. Set in the server-side repo config and server flags; shown here read-only.</p>
+			</div>
+		</div>
+		<section class="panel">
+			<header><h2>You</h2></header>
+			<dl class="kv">
+				<dt>Signed in as</dt><dd>{ orUnknown(m.Principal.DisplayName()) }</dd>
+				<dt>How</dt><dd>{ signedInWith(m.Principal) }</dd>
+				<dt>Role</dt>
+				<dd>
+					@roleText(d.Role)
+					if len(d.Repos) > 0 {
+						<span class="muted"> · per-repo roles below</span>
+					}
+				</dd>
+			</dl>
+			if !d.SignIn {
+				@capabilityNote("Web sign-in is off, so everyone who reaches the UI has full access. Turn on sign-in to apply these rules.")
+			}
+		</section>
+		<div class="cols">
+			<section class="panel">
+				<header><h2>What each action needs</h2></header>
+				<div class="scroll">
+					<table class="tbl">
+						<thead><tr><th>Action</th><th>Needs</th></tr></thead>
+						<tbody>
+							for _, req := range d.Summary.Requirements {
+								<tr><td>{ req.Action.Describe() }</td><td>@roleText(req.Role)</td></tr>
+							}
+						</tbody>
+					</table>
+				</div>
+				if d.Summary.EnforcePR {
+					@capabilityNote("The same unlock rule applies to atlantis unlock comments on pull requests, matched against the commenter's GitHub user and teams.")
+				} else {
+					@capabilityNote("atlantis unlock comments on pull requests are not checked against these rules. Set access.enforce_in_pr_comments to check them.")
+				}
+			</section>
+			<section class="panel">
+				<header><h2>Who holds each role</h2></header>
+				if len(d.Summary.Roles) == 0 {
+					<p class="empty">No role rules are set.</p>
+				} else {
+					<dl class="kv">
+						for _, rs := range d.Summary.Roles {
+							<dt>@roleText(rs.Role)</dt>
+							<dd>{ strings.Join(rs.Rules, ", ") }</dd>
+						}
+						<dt>Everyone else</dt><dd>@roleText(d.Summary.Default)</dd>
+					</dl>
+				}
+			</section>
+		</div>
+		if len(d.Summary.Repos) > 0 {
+			<section class="panel">
+				<header><h2>Repository rules</h2><span class="muted">Later entries win, as elsewhere in the repo config</span></header>
+				<div class="scroll">
+					<table class="tbl">
+						<thead><tr><th>Repositories</th><th>Extra roles</th><th>Unlocking needs</th></tr></thead>
+						<tbody>
+							for _, rp := range d.Summary.Repos {
+								<tr>
+									<td class="mono">{ rp.Match }</td>
+									<td>
+										if len(rp.Roles) == 0 {
+											<span class="muted">None</span>
+										}
+										for _, rs := range rp.Roles {
+											<div>@roleText(rs.Role) <span class="muted">{ strings.Join(rs.Rules, ", ") }</span></div>
+										}
+									</td>
+									<td>
+										if rp.Unlock == webauth.RoleNone {
+											<span class="muted">Same as everywhere</span>
+										} else {
+											@roleText(rp.Unlock)
+										}
+									</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			</section>
+		}
+		if len(d.Repos) > 0 {
+			<section class="panel">
+				<header><h2>Your access by repository</h2><span class="muted">Repositories with pull requests or locks</span></header>
+				<div class="scroll">
+					<table class="tbl">
+						<thead><tr><th>Repository</th><th>Your role</th><th>Unlocking needs</th><th>You can unlock</th></tr></thead>
+						<tbody>
+							for _, ra := range d.Repos {
+								<tr>
+									<td class="mono">{ ra.ID }</td>
+									<td>@roleText(ra.Role)</td>
+									<td>@roleText(ra.NeedUnlock)</td>
+									<td>
+										if ra.CanUnlock {
+											@pill(toneOK, "Yes")
+										} else {
+											@pill(toneNeutral, "No")
+										}
+									</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			</section>
+		}
+	}
 }

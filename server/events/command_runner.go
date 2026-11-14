@@ -137,8 +137,11 @@ type DefaultCommandRunner struct {
 	PostWorkflowHooksCommandRunner PostWorkflowHooksCommandRunner        `validate:"required"`
 	PullStatusFetcher              PullStatusFetcher                     `validate:"required"`
 	TeamAllowlistChecker           command.TeamAllowlistChecker          `validate:"required"`
-	VarFileAllowlistChecker        *VarFileAllowlistChecker              `validate:"required"`
-	CommitStatusUpdater            CommitStatusUpdater                   `validate:"required"`
+	// CommentAccess applies the web access policy's unlock rule to
+	// "atlantis unlock" comments when the policy asks for it. Optional.
+	CommentAccess           CommentAccessChecker
+	VarFileAllowlistChecker *VarFileAllowlistChecker `validate:"required"`
+	CommitStatusUpdater     CommitStatusUpdater      `validate:"required"`
 }
 
 // RunAutoplanCommand runs plan and policy_checks when a pull request is opened or updated.
@@ -254,6 +257,68 @@ func (c *DefaultCommandRunner) commentUserDoesNotHavePermissions(baseRepo models
 	if err := c.VCSClient.CreateComment(c.Logger, baseRepo, pullNum, errMsg, ""); err != nil {
 		c.Logger.Err("unable to comment on pull request: %s", err)
 	}
+}
+
+// CommentAccessChecker is the part of the web access policy that applies to
+// pull request comments.
+type CommentAccessChecker interface {
+	// EnforceInPRComments reports whether comments are checked at all.
+	EnforceInPRComments() bool
+	// GitHubTeamRules lists the team slugs the policy names for an org.
+	GitHubTeamRules(org string) []string
+	// AllowsCommenterUnlock reports whether a commenter, identified by VCS
+	// login and "github:org/team" groups, may unlock projects in the repo,
+	// and which role unlocking needs there.
+	AllowsCommenterUnlock(repoID string, login string, groups []string) (bool, string)
+}
+
+// commenterMayUnlock applies the access policy to an "atlantis unlock"
+// comment. Child-team membership counts for the parent team, as it does for
+// the team allowlist.
+func (c *DefaultCommandRunner) commenterMayUnlock(logger logging.SimpleLogging, repo models.Repo, pullNum int, user *models.User) bool {
+	if c.CommentAccess == nil || !c.CommentAccess.EnforceInPRComments() {
+		return true
+	}
+	if len(user.Teams) == 0 {
+		if err := c.fetchUserTeams(logger, repo, user); err != nil {
+			logger.Warn("unable to fetch teams for %q to check the access policy: %s", user.Username, err)
+		}
+	}
+	member := map[string]bool{}
+	for _, t := range user.Teams {
+		member[strings.ToLower(t)] = true
+	}
+	for _, ruled := range c.CommentAccess.GitHubTeamRules(repo.Owner) {
+		if member[strings.ToLower(ruled)] {
+			continue
+		}
+		descendants, err := fetchDescendantTeams(c.VCSClient, logger, repo, ruled, 20)
+		if err != nil {
+			logger.Warn("unable to fetch child teams of %q: %s", ruled, err)
+			continue
+		}
+		for _, d := range descendants {
+			if member[strings.ToLower(d)] {
+				member[strings.ToLower(ruled)] = true
+				break
+			}
+		}
+	}
+	groups := make([]string, 0, len(member))
+	for t := range member {
+		groups = append(groups, "github:"+repo.Owner+"/"+t)
+	}
+	repoID := repo.VCSHost.Hostname + "/" + repo.FullName
+	allowed, need := c.CommentAccess.AllowsCommenterUnlock(repoID, user.Username, groups)
+	if allowed {
+		return true
+	}
+	logger.Info("access policy denied unlock comment user=%q repo=%q need=%q", user.Username, repoID, need)
+	msg := fmt.Sprintf("```\nError: User @%s does not have permission to unlock projects in this repository. Unlocking needs the %s role in Atlantis's access policy.\n```", user.Username, need)
+	if err := c.VCSClient.CreateComment(logger, repo, pullNum, msg, ""); err != nil {
+		c.Logger.Err("unable to comment on pull request: %s", err)
+	}
+	return false
 }
 
 // fetchDescendantTeams fetches all descendant team slugs for the given team up to maxDepth
@@ -510,6 +575,10 @@ func (c *DefaultCommandRunner) RunCommentCommand(baseRepo models.Repo, maybeHead
 	}
 
 	if !c.validateCtxAndComment(ctx, cmd.Name, true) {
+		return
+	}
+
+	if cmd.Name == command.Unlock && !c.commenterMayUnlock(ctx.Log, baseRepo, pullNum, &user) {
 		return
 	}
 

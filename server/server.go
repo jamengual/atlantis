@@ -1021,6 +1021,15 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 		}
 	}
 
+	accessPolicy, err := newAccessPolicy(userConfig, globalCfg)
+	if err != nil {
+		return nil, err
+	}
+	var commentAccess events.CommentAccessChecker
+	if accessPolicy.EnforceInPRComments() {
+		commentAccess = accessPolicy
+	}
+
 	commandRunner := &events.DefaultCommandRunner{
 		VCSClient:                      vcsClient,
 		GithubPullGetter:               githubClient,
@@ -1045,6 +1054,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 		PostWorkflowHooksCommandRunner: postWorkflowHooksCommandRunner,
 		PullStatusFetcher:              database,
 		TeamAllowlistChecker:           teamAllowlistChecker,
+		CommentAccess:                  commentAccess,
 		VarFileAllowlistChecker:        varFileAllowlistChecker,
 		CommitStatusUpdater:            commitStatusUpdater,
 	}
@@ -1159,7 +1169,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 
 	var webUIHandler *webui.Handler
 	if slices.Contains(userConfig.Experiments, webUIExperiment) {
-		webAuth, err := newWebAuth(userConfig, parsedURL, logger)
+		webAuth, err := newWebAuthManager(userConfig, parsedURL, logger, accessPolicy)
 		if err != nil {
 			return nil, err
 		}
@@ -1182,6 +1192,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 			BasePath: strings.TrimRight(parsedURL.Path, "/"),
 			Logger:   logger,
 			Auth:     webAuth,
+			Policy:   accessPolicy,
 		}
 	}
 
@@ -1237,9 +1248,17 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 // SetupRoutes registers all HTTP routes on the router.
 // Extracted from Start() to enable route registration testing.
 func (s *Server) SetupRoutes() {
-	s.Router.HandleFunc("/", s.Index).Methods("GET").MatcherFunc(func(r *http.Request, rm *mux.RouteMatch) bool {
+	// With web sign-in, the existing UI's pages lead to the new UI and its
+	// actions follow the same access policy, so there is one way in.
+	signIn := s.WebUI != nil && s.WebUI.Auth != nil
+	isIndex := func(r *http.Request, rm *mux.RouteMatch) bool {
 		return r.URL.Path == "/" || r.URL.Path == "/index.html"
-	})
+	}
+	if signIn {
+		s.Router.Handle("/", s.WebUI.RedirectToUI("")).Methods("GET").MatcherFunc(isIndex)
+	} else {
+		s.Router.HandleFunc("/", s.Index).Methods("GET").MatcherFunc(isIndex)
+	}
 	s.Router.HandleFunc("/healthz", s.Healthz).Methods("GET")
 	s.Router.HandleFunc("/readyz", s.Readyz).Methods("GET")
 	s.Router.HandleFunc("/status", s.StatusController.Get).Methods("GET")
@@ -1262,10 +1281,17 @@ func (s *Server) SetupRoutes() {
 	}
 	s.Router.HandleFunc("/github-app/exchange-code", s.GithubAppController.ExchangeCode).Methods("GET")
 	s.Router.HandleFunc("/github-app/setup", s.GithubAppController.New).Methods("GET")
-	s.Router.HandleFunc("/locks", s.LocksController.DeleteLock).Methods("DELETE").Queries("id", "{id:.*}")
-	s.Router.HandleFunc("/lock", s.LocksController.GetLock).Methods("GET").
-		Queries(LockViewRouteIDQueryParam, fmt.Sprintf("{%s}", LockViewRouteIDQueryParam)).Name(LockViewRouteName)
-	s.Router.HandleFunc("/jobs/{job-id}", s.JobsController.GetProjectJobs).Methods("GET").Name(ProjectJobsViewRouteName)
+	if signIn {
+		s.Router.Handle("/locks", s.WebUI.ProtectUnlock(s.LocksController.DeleteLock)).Methods("DELETE").Queries("id", "{id:.*}")
+		s.Router.Handle("/lock", s.WebUI.RedirectToUI("/locks")).Methods("GET").
+			Queries(LockViewRouteIDQueryParam, fmt.Sprintf("{%s}", LockViewRouteIDQueryParam)).Name(LockViewRouteName)
+		s.Router.Handle("/jobs/{job-id}", s.WebUI.RedirectToUI("")).Methods("GET").Name(ProjectJobsViewRouteName)
+	} else {
+		s.Router.HandleFunc("/locks", s.LocksController.DeleteLock).Methods("DELETE").Queries("id", "{id:.*}")
+		s.Router.HandleFunc("/lock", s.LocksController.GetLock).Methods("GET").
+			Queries(LockViewRouteIDQueryParam, fmt.Sprintf("{%s}", LockViewRouteIDQueryParam)).Name(LockViewRouteName)
+		s.Router.HandleFunc("/jobs/{job-id}", s.JobsController.GetProjectJobs).Methods("GET").Name(ProjectJobsViewRouteName)
+	}
 	s.Router.HandleFunc("/jobs/{job-id}/ws", s.JobsController.GetProjectJobsWS).Methods("GET")
 
 	r, ok := s.StatsReporter.(prometheus.Reporter)
@@ -1273,8 +1299,13 @@ func (s *Server) SetupRoutes() {
 		s.Router.Handle(s.CommandRunner.GlobalCfg.Metrics.Prometheus.Endpoint, r.HTTPHandler())
 	}
 	if !s.DisableGlobalApplyLock {
-		s.Router.HandleFunc("/apply/lock", s.LocksController.LockApply).Methods("POST").Queries()
-		s.Router.HandleFunc("/apply/unlock", s.LocksController.UnlockApply).Methods("DELETE").Queries()
+		if signIn {
+			s.Router.Handle("/apply/lock", s.WebUI.ProtectLockApplies(s.LocksController.LockApply)).Methods("POST")
+			s.Router.Handle("/apply/unlock", s.WebUI.ProtectLockApplies(s.LocksController.UnlockApply)).Methods("DELETE")
+		} else {
+			s.Router.HandleFunc("/apply/lock", s.LocksController.LockApply).Methods("POST").Queries()
+			s.Router.HandleFunc("/apply/unlock", s.LocksController.UnlockApply).Methods("DELETE").Queries()
+		}
 	}
 
 	if s.EnableProfilingAPI {

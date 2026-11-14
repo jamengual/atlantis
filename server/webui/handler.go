@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -71,6 +72,39 @@ type Handler struct {
 	// server's basic auth, or none, and everyone who reaches it is an admin,
 	// as with the existing UI.
 	Auth *webauth.Manager
+	// Policy is used when Auth is nil, so the Access page can still show the
+	// configured rules. Auth carries its own policy.
+	Policy *webauth.Policy
+}
+
+var emptyPolicy, _ = webauth.NewPolicy(webauth.PolicyConfig{})
+
+func (h *Handler) policy() *webauth.Policy {
+	switch {
+	case h.Auth != nil:
+		return h.Auth.Policy()
+	case h.Policy != nil:
+		return h.Policy
+	}
+	return emptyPolicy
+}
+
+// allows reports whether the request's principal may take an action in a
+// repository, given as an ID such as github.com/acme/infra.
+func (h *Handler) allows(r *http.Request, action webauth.Action, repoID string) bool {
+	p := webauth.FromContext(r.Context())
+	if p == nil {
+		return false
+	}
+	return h.policy().Allows(p.AsSubject(), p.Base, action, repoID)
+}
+
+// repoID is the server-side repo config ID of a repository.
+func repoID(r Repository) string {
+	if r.VCSHost == "" {
+		return r.FullName
+	}
+	return r.VCSHost + "/" + r.FullName
 }
 
 // Register adds the UI routes to r. Mutating routes reject cross-origin
@@ -92,7 +126,7 @@ func (h *Handler) Register(r *mux.Router) {
 		ui.Handle("/logout", csrf.Handler(http.HandlerFunc(h.logout))).Methods(http.MethodPost)
 	}
 
-	view := func(f http.HandlerFunc) http.Handler { return h.guard(webauth.RoleViewer, f) }
+	view := func(f http.HandlerFunc) http.Handler { return h.guard(webauth.ActionView, f) }
 	ui.Handle("", view(h.overview)).Methods(http.MethodGet)
 	ui.Handle("/", view(h.overview)).Methods(http.MethodGet)
 	ui.Handle("/pulls", view(h.pulls)).Methods(http.MethodGet)
@@ -102,10 +136,12 @@ func (h *Handler) Register(r *mux.Router) {
 	ui.Handle("/jobs/{id}", view(h.job)).Methods(http.MethodGet)
 	ui.Handle("/jobs/{id}/events", view(h.jobEvents)).Methods(http.MethodGet)
 	ui.Handle("/replica", view(h.replica)).Methods(http.MethodGet)
+	ui.Handle("/access", view(h.access)).Methods(http.MethodGet)
 
-	ui.Handle("/locks/discard", csrf.Handler(h.guard(webauth.RoleOperator, h.discardLocks))).Methods(http.MethodPost)
-	ui.Handle("/applies/lock", csrf.Handler(h.guard(webauth.RoleAdmin, h.lockApplies))).Methods(http.MethodPost)
-	ui.Handle("/applies/unlock", csrf.Handler(h.guard(webauth.RoleAdmin, h.unlockApplies))).Methods(http.MethodPost)
+	// Unlocking is checked per lock, against each lock's repository.
+	ui.Handle("/locks/discard", csrf.Handler(h.guard(webauth.ActionView, h.discardLocks))).Methods(http.MethodPost)
+	ui.Handle("/applies/lock", csrf.Handler(h.guard(webauth.ActionLockApplies, h.lockApplies))).Methods(http.MethodPost)
+	ui.Handle("/applies/unlock", csrf.Handler(h.guard(webauth.ActionLockApplies, h.unlockApplies))).Methods(http.MethodPost)
 }
 
 // signInPages reports whether users sign in on Atlantis's own pages, as
@@ -114,12 +150,12 @@ func (h *Handler) signInPages() bool {
 	return h.Auth != nil && !h.Auth.UsesProxy()
 }
 
-// guard requires a signed-in principal with at least the given role.
-func (h *Handler) guard(role webauth.Role, f http.HandlerFunc) http.Handler {
+// guard requires a signed-in principal allowed to take the action. Global
+// actions are checked here; unlocking is checked per repository.
+func (h *Handler) guard(action webauth.Action, f http.HandlerFunc) http.Handler {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p := webauth.FromContext(r.Context())
-		if !p.Can(role) {
-			h.forbidden(w, r, p, role)
+		if !h.allows(r, action, "") {
+			h.forbidden(w, r, action, "")
 			return
 		}
 		f(w, r)
@@ -135,7 +171,7 @@ func (h *Handler) guard(role webauth.Role, f http.HandlerFunc) http.Handler {
 // anonymous visitor when basic auth is off, has full access.
 func withoutSignIn(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p := &webauth.Principal{Provider: "none", Role: webauth.RoleAdmin}
+		p := &webauth.Principal{Provider: "none", Role: webauth.RoleAdmin, Base: webauth.RoleAdmin}
 		if u, _, ok := r.BasicAuth(); ok {
 			p.Subject, p.Name, p.Provider = u, u, "basic"
 		}
@@ -143,12 +179,21 @@ func withoutSignIn(next http.Handler) http.Handler {
 	})
 }
 
-func (h *Handler) forbidden(w http.ResponseWriter, r *http.Request, p *webauth.Principal, need webauth.Role) {
-	msg := fmt.Sprintf("This needs the %s role. You're signed in as %s with the %s role. Ask an administrator for access.", need, orUnknown(p.DisplayName()), p.Role)
-	if p.Role == webauth.RoleNone {
+// forbidden explains which role an action needs and where.
+func (h *Handler) forbidden(w http.ResponseWriter, r *http.Request, action webauth.Action, repo string) {
+	p := webauth.FromContext(r.Context())
+	need := h.policy().Requires(action, repo)
+	have := h.policy().RoleIn(p.AsSubject(), repo)
+	where := ""
+	if repo != "" {
+		where = " on " + repo
+	}
+	msg := fmt.Sprintf("%s needs the %s role%s. You're signed in as %s with the %s role there. Ask an administrator for access.",
+		action.Describe(), need, where, orUnknown(p.DisplayName()), have)
+	if p.Role == webauth.RoleNone && have == webauth.RoleNone {
 		msg = fmt.Sprintf("You're signed in as %s, but your account has no Atlantis role. Ask an administrator to add you to a group that has access.", orUnknown(p.DisplayName()))
 	}
-	h.Logger.Info("web ui denied path=%q subject=%q provider=%q role=%q need=%q", r.URL.Path, p.Subject, p.Provider, p.Role, need)
+	h.Logger.Info("web ui denied path=%q action=%q repo=%q subject=%q provider=%q role=%q need=%q", r.URL.Path, action, repo, p.Subject, p.Provider, have, need)
 	if r.Method != http.MethodGet || p.Role == webauth.RoleNone {
 		http.Error(w, msg, http.StatusForbidden)
 		return
@@ -222,6 +267,7 @@ func (h *Handler) metaWith(r *http.Request, l loaded, title, nav string, crumbs 
 		Instance:  h.Store.Instance(ctx),
 		Caps:      h.Store.Capabilities(),
 		Principal: webauth.FromContext(ctx),
+		can:       func(a webauth.Action, repo string) bool { return h.allows(r, a, repo) },
 		SignOut:   h.signInPages(),
 		Flash:     flashMessage(r.URL.Query()),
 	}
@@ -462,6 +508,28 @@ func (h *Handler) discardLocks(w http.ResponseWriter, r *http.Request) {
 		h.redirectBack(w, r, "/locks", url.Values{"done": {"none-selected"}})
 		return
 	}
+	// Check every lock before discarding any, so a request either unlocks
+	// all the selected projects or none of them.
+	locks, err := h.Store.ListLocks(r.Context())
+	if err != nil {
+		h.fail(w, r, "locks", err)
+		return
+	}
+	repoOf := map[string]string{}
+	for _, l := range locks {
+		repoOf[l.ID] = repoID(l.Repo)
+	}
+	for _, id := range ids {
+		repo, known := repoOf[id]
+		if known && !h.allows(r, webauth.ActionUnlock, repo) {
+			h.forbidden(w, r, webauth.ActionUnlock, repo)
+			return
+		}
+		if !known && !h.allows(r, webauth.ActionUnlock, "") {
+			h.forbidden(w, r, webauth.ActionUnlock, "")
+			return
+		}
+	}
 	who := actor(r)
 	unlocked, missing := 0, 0
 	for _, id := range ids {
@@ -690,4 +758,80 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 	}
 	h.Auth.Logout(w)
 	http.Redirect(w, r, h.BasePath+"/ui/login?notice=signed-out", http.StatusSeeOther)
+}
+
+func (h *Handler) access(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	p := webauth.FromContext(ctx)
+	pol := h.policy()
+	d := accessData{Summary: pol.Summarize(), SignIn: h.Auth != nil, Role: max(p.Base, pol.GlobalRole(p.AsSubject()))}
+	seen := map[string]bool{}
+	add := func(repo Repository) {
+		id := repoID(repo)
+		if id == "" || seen[id] {
+			return
+		}
+		seen[id] = true
+		d.Repos = append(d.Repos, repoAccess{
+			ID:         id,
+			Role:       max(p.Base, pol.RoleIn(p.AsSubject(), id)),
+			NeedUnlock: pol.Requires(webauth.ActionUnlock, id),
+			CanUnlock:  h.allows(r, webauth.ActionUnlock, id),
+		})
+	}
+	if pulls, err := h.Store.ListPulls(ctx); err == nil {
+		for _, pr := range pulls {
+			add(pr.Repo)
+		}
+	}
+	if locks, err := h.Store.ListLocks(ctx); err == nil {
+		for _, l := range locks {
+			add(l.Repo)
+		}
+	}
+	slices.SortFunc(d.Repos, func(a, b repoAccess) int { return strings.Compare(a.ID, b.ID) })
+	m := h.meta(r, "Access", "access", crumb{Label: "Access"})
+	h.render(w, r, http.StatusOK, accessPage(m, d))
+}
+
+// ---------- existing UI routes ----------
+
+// RedirectToUI sends a request for an existing-UI page to its new UI
+// equivalent. Atlantis uses it for the existing UI's pages when web sign-in
+// is on, so there is one way in, under one set of rules.
+func (h *Handler) RedirectToUI(path string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		target := h.BasePath + "/ui" + path
+		if id := mux.Vars(r)["job-id"]; id != "" {
+			target = jobHref(h.BasePath, id)
+		}
+		http.Redirect(w, r, target, http.StatusSeeOther)
+	})
+}
+
+// ProtectLockApplies guards the existing UI's apply lock endpoints with web
+// sign-in and the lock_applies permission.
+func (h *Handler) ProtectLockApplies(next http.HandlerFunc) http.Handler {
+	return http.NewCrossOriginProtection().Handler(h.guard(webauth.ActionLockApplies, next))
+}
+
+// ProtectUnlock guards the existing UI's unlock endpoint, DELETE /locks?id=,
+// with web sign-in and the unlock permission for the lock's repository.
+func (h *Handler) ProtectUnlock(next http.HandlerFunc) http.Handler {
+	return http.NewCrossOriginProtection().Handler(h.guard(webauth.ActionView, func(w http.ResponseWriter, r *http.Request) {
+		id, _ := url.QueryUnescape(r.URL.Query().Get("id"))
+		repo := ""
+		if locks, err := h.Store.ListLocks(r.Context()); err == nil {
+			for _, l := range locks {
+				if l.ID == id {
+					repo = repoID(l.Repo)
+				}
+			}
+		}
+		if !h.allows(r, webauth.ActionUnlock, repo) {
+			h.forbidden(w, r, webauth.ActionUnlock, repo)
+			return
+		}
+		next(w, r)
+	}))
 }
