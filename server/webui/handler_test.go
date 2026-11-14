@@ -227,7 +227,7 @@ func TestPages_EscapeUserContent(t *testing.T) {
 func TestPages_BasePath(t *testing.T) {
 	srv := newServer(t, sampleStore(), &fakeActions{}, "/atlantis")
 	_, body := get(t, srv, "/ui/pulls")
-	assertContains(t, body, `href="/atlantis/ui/repos/acme/infra/pulls/1482?host=github.com"`, `/atlantis/ui/static/app.css?v=`)
+	assertContains(t, body, `href="/atlantis/ui/repos/acme/infra/pulls/1482?host=github.com"`, `/atlantis/ui/static/app.css?v=`, `src="/atlantis/static/images/atlantis-icon_512.png"`)
 }
 
 func TestPages_NotFound(t *testing.T) {

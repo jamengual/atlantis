@@ -58,7 +58,7 @@ templ layout(m meta) {
 			<div class="app">
 				<aside class="rail">
 					<a class="brand" href={ m.url("") }>
-						@brandMark()
+						@brandMark(m)
 						Atlantis
 					</a>
 					<div class="fleet-mini" aria-label="This replica">
@@ -154,12 +154,8 @@ templ navLink(m meta, key, path, label, iconName string, count int) {
 	</a>
 }
 
-templ brandMark() {
-	<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true" class="brandmark">
-		<path class="bm-roof" d="M6 11V7l6-4 6 4v4"></path>
-		<path class="bm-wave" d="M3 15c2.5-2.5 4.5-2.5 6 0s3.5 2.5 6 0 4.5-2.5 6 0"></path>
-		<path class="bm-wave bm-faint" d="M3 20c2.5-2.5 4.5-2.5 6 0s3.5 2.5 6 0 4.5-2.5 6 0"></path>
-	</svg>
+templ brandMark(m meta) {
+	<img class="brandmark" src={ m.Base + "/static/images/atlantis-icon_512.png" } width="28" height="28" alt=""/>
 }
 
 templ icon(name string) {
