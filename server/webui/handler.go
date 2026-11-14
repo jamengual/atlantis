@@ -137,6 +137,8 @@ func (h *Handler) Register(r *mux.Router) {
 		ui.Handle("/logout", csrf.Handler(http.HandlerFunc(h.logout))).Methods(http.MethodPost)
 	}
 
+	h.registerAPI(ui)
+
 	view := func(f http.HandlerFunc) http.Handler { return h.guard(webauth.ActionView, f) }
 	ui.Handle("", view(h.overview)).Methods(http.MethodGet)
 	ui.Handle("/", view(h.overview)).Methods(http.MethodGet)
@@ -205,6 +207,19 @@ func withoutSignIn(next http.Handler) http.Handler {
 // forbidden explains which role an action needs and where.
 func (h *Handler) forbidden(w http.ResponseWriter, r *http.Request, action webauth.Action, repo string) {
 	p := webauth.FromContext(r.Context())
+	msg := h.denial(r, action, repo)
+	if r.Method != http.MethodGet || p.Role == webauth.RoleNone {
+		http.Error(w, msg, http.StatusForbidden)
+		return
+	}
+	m := h.meta(r, "Not allowed", "")
+	h.render(w, r, http.StatusForbidden, errorPage(m, "You don't have access to this", msg))
+}
+
+// denial explains which role an action needs and where, and logs the
+// refusal.
+func (h *Handler) denial(r *http.Request, action webauth.Action, repo string) string {
+	p := webauth.FromContext(r.Context())
 	need := h.policy().Requires(action, repo)
 	have := h.policy().RoleIn(p.AsSubject(), repo)
 	where := ""
@@ -217,12 +232,7 @@ func (h *Handler) forbidden(w http.ResponseWriter, r *http.Request, action webau
 		msg = fmt.Sprintf("You're signed in as %s, but your account has no Atlantis role. Ask an administrator to add you to a group that has access.", orUnknown(p.DisplayName()))
 	}
 	h.Logger.Info("web ui denied path=%q action=%q repo=%q subject=%q provider=%q role=%q need=%q", r.URL.Path, action, repo, p.Subject, p.Provider, have, need)
-	if r.Method != http.MethodGet || p.Role == webauth.RoleNone {
-		http.Error(w, msg, http.StatusForbidden)
-		return
-	}
-	m := h.meta(r, "Not allowed", "")
-	h.render(w, r, http.StatusForbidden, errorPage(m, "You don't have access to this", msg))
+	return msg
 }
 
 func securityHeaders(next http.Handler) http.Handler {
