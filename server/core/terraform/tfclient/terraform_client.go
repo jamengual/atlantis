@@ -84,6 +84,16 @@ type DefaultClient struct {
 	usePluginCache bool
 
 	projectCmdOutputHandler jobs.ProjectCommandOutputHandler
+
+	// processes tracks running Terraform commands by job, so a job can be
+	// stopped. Nil tracks nothing.
+	processes *jobs.ProcessRegistry
+}
+
+// TrackProcesses records the Terraform commands the client runs in r, so
+// that stopping a job interrupts them.
+func (c *DefaultClient) TrackProcesses(r *jobs.ProcessRegistry) {
+	c.processes = r
 }
 
 // versionRegex extracts the version from `terraform version` output.
@@ -395,7 +405,7 @@ func (c *DefaultClient) RunCommandWithVersion(ctx command.ProjectContext, path s
 		return "", err
 	}
 	start := time.Now()
-	out, err := cmd.CombinedOutput()
+	out, err := c.processes.CombinedOutput(ctx.JobID, cmd, nil)
 	dur := time.Since(start)
 	log := ctx.Log.With("duration", dur)
 	if err != nil {
@@ -562,7 +572,7 @@ func (c *DefaultClient) RunCommandAsync(ctx command.ProjectContext, path string,
 		return inCh, outCh
 	}
 
-	runner := models.NewArgvCommandRunner(argv, display, envVars, path, !ctx.SuppressJobOutput, c.projectCmdOutputHandler)
+	runner := models.NewArgvCommandRunner(argv, display, envVars, path, !ctx.SuppressJobOutput, c.projectCmdOutputHandler).WithProcesses(c.processes)
 	inCh, outCh := runner.RunCommandAsync(ctx)
 	return inCh, outCh
 }

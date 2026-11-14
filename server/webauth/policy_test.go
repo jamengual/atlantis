@@ -90,3 +90,57 @@ func TestPolicy_HelpersAndSummary(t *testing.T) {
 	Ok(t, err)
 	Assert(t, !empty.HasRules(), "empty policy has no rules")
 }
+
+func TestPolicy_StopJob(t *testing.T) {
+	p, err := webauth.NewPolicy(webauth.PolicyConfig{
+		Access: &valid.Access{
+			Roles: valid.AccessRoles{
+				Admin:    []valid.AccessRule{{Group: "platform-admins"}},
+				Operator: []valid.AccessRule{{Group: "sre"}},
+				Viewer:   []valid.AccessRule{{Domain: "acme.com"}},
+			},
+		},
+		Repos: []valid.Repo{
+			{IDRegex: regexp.MustCompile(".*")},
+			{ID: "github.com/acme/data-lake", Access: &valid.RepoAccess{Roles: valid.AccessRoles{Operator: []valid.AccessRule{{Group: "data-eng"}}}}},
+			{IDRegex: regexp.MustCompile(`^github\.com/acme/prod-`), Access: &valid.RepoAccess{Permissions: valid.AccessPermissions{StopJob: "admin"}}},
+			{ID: "github.com/acme/sandbox", Access: &valid.RepoAccess{Permissions: valid.AccessPermissions{StopJob: "viewer"}}},
+		},
+	})
+	Ok(t, err)
+	viewer := webauth.Subject{Email: "v@acme.com"}
+	dataEng := webauth.Subject{Email: "d@acme.com", Groups: []string{"data-eng"}}
+	sre := webauth.Subject{Groups: []string{"sre"}}
+	admin := webauth.Subject{Groups: []string{"platform-admins"}}
+	cases := []struct {
+		name string
+		s    webauth.Subject
+		repo string
+		want bool
+	}{
+		{"operators stop jobs by default", sre, "github.com/acme/infra", true},
+		{"viewers don't", viewer, "github.com/acme/infra", false},
+		{"a repo grant reaches stopping", dataEng, "github.com/acme/data-lake", true},
+		{"but not other repos", dataEng, "github.com/acme/infra", false},
+		{"a repo can require admin", sre, "github.com/acme/prod-network", false},
+		{"which admins have", admin, "github.com/acme/prod-network", true},
+		{"a repo can relax it", viewer, "github.com/acme/sandbox", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			Equals(t, c.want, p.Allows(c.s, webauth.RoleNone, webauth.ActionStopJob, c.repo))
+		})
+	}
+	Equals(t, webauth.RoleOperator, p.Requires(webauth.ActionStopJob, ""))
+	Equals(t, webauth.RoleAdmin, p.Requires(webauth.ActionStopJob, "github.com/acme/prod-x"))
+	// The stop requirement doesn't change unlocking, and vice versa.
+	Equals(t, webauth.RoleOperator, p.Requires(webauth.ActionUnlock, "github.com/acme/prod-x"))
+	Assert(t, webauth.ActionStopJob.PerRepo() && webauth.ActionUnlock.PerRepo(), "stop and unlock are per repo")
+	Assert(t, !webauth.ActionLockApplies.PerRepo() && !webauth.ActionView.PerRepo(), "view and lock applies are global")
+
+	s := p.Summarize()
+	Equals(t, webauth.ActionStopJob, s.Requirements[2].Action)
+	Equals(t, webauth.RoleOperator, s.Requirements[2].Role)
+	Equals(t, webauth.RoleAdmin, s.Repos[1].StopJob)
+	Equals(t, webauth.RoleNone, s.Repos[1].Unlock)
+}

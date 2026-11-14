@@ -456,6 +456,13 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 		)
 	}
 
+	// The web UI can stop running jobs. Without it, nothing tracks processes
+	// and commands run exactly as before.
+	var jobProcesses *jobs.ProcessRegistry
+	if slices.Contains(userConfig.Experiments, webUIExperiment) {
+		jobProcesses = jobs.NewProcessRegistry()
+	}
+
 	distribution := terraform.NewDistribution(userConfig.DefaultTFDistribution)
 
 	terraformClient, err := tfclient.NewClient(
@@ -476,6 +483,9 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 	// installed on our CI system where the unit tests run.
 	if err != nil && flag.Lookup("test.v") == nil {
 		return nil, fmt.Errorf("initializing %s: %w", userConfig.DefaultTFDistribution, err)
+	}
+	if terraformClient != nil {
+		terraformClient.TrackProcesses(jobProcesses)
 	}
 	markdownRenderer := events.NewMarkdownRenderer(
 		gitlabClient.SupportsCommonMark(),
@@ -667,6 +677,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 		DefaultTFVersion:        defaultTfVersion,
 		TerraformBinDir:         terraformBinDir,
 		ProjectCmdOutputHandler: projectCmdOutputHandler,
+		Processes:               jobProcesses,
 	}
 	drainer := &events.Drainer{}
 	statusController := &controllers.StatusController{
@@ -681,6 +692,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 		WorkingDir:       workingDir,
 		PreWorkflowHookRunner: runtime.DefaultPreWorkflowHookRunner{
 			OutputHandler: projectCmdOutputHandler,
+			Processes:     jobProcesses,
 		},
 		CommitStatusUpdater: commitStatusUpdater,
 		Router:              router,
@@ -692,6 +704,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 		WorkingDir:       workingDir,
 		PostWorkflowHookRunner: runtime.DefaultPostWorkflowHookRunner{
 			OutputHandler: projectCmdOutputHandler,
+			Processes:     jobProcesses,
 		},
 		CommitStatusUpdater: commitStatusUpdater,
 		Router:              router,
@@ -813,6 +826,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 	}
 
 	projectCommandRunner := &events.DefaultProjectCommandRunner{
+		Processes:               jobProcesses,
 		VcsClient:               vcsClient,
 		VarFileAllowlistChecker: varFileAllowlistChecker,
 		Locker:                  projectLocker,
@@ -1186,10 +1200,12 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 				Experiments:    slices.Clone(userConfig.Experiments),
 				WorkingDir:     workingDir,
 				SharePlanDir:   userConfig.SharePlanDir,
+				Stops:          jobProcesses,
 			},
 			Actions: &webui.LegacyActions{
 				Discarder:   locksController,
 				ApplyLocker: applyLockingClient,
+				Stopper:     jobProcesses,
 			},
 			BasePath: strings.TrimRight(parsedURL.Path, "/"),
 			Logger:   logger,

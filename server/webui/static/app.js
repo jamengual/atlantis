@@ -25,6 +25,11 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("click", (e) => {
   document.querySelectorAll("details.confirm[open]").forEach((d) => { if (!d.contains(e.target)) d.removeAttribute("open"); });
 });
+// Don't refresh a panel while one of its confirmations is open, or the
+// refresh would close it under the pointer.
+document.addEventListener("htmx:before:request", (e) => {
+  if (e.target?.querySelector?.("details.confirm[open]")) e.preventDefault();
+});
 
 // ---------- command palette ----------
 function paletteItems() {
@@ -182,10 +187,12 @@ class LogView extends HTMLElement {
     this.source = new EventSource(this.dataset.src);
     this.source.onopen = () => this.setStatus("run", "Streaming");
     this.source.onmessage = (e) => this.push(Number(e.lastEventId) || this.total + this.pending.length + 1, e.data);
-    this.source.addEventListener("done", () => {
+    this.source.addEventListener("done", (e) => {
       this.source.close();
       this.flush();
-      this.setStatus("", "Finished");
+      const status = (e.data || "").trim();
+      if (status) this.setStatus("bad", status);
+      else this.setStatus("", "Finished");
     });
     this.source.onerror = () => {
       if (this.source.readyState === EventSource.CLOSED) {

@@ -39,6 +39,14 @@ type ShellCommandRunner struct {
 	streamOutput  bool
 	cmd           *exec.Cmd
 	shell         *valid.CommandShell
+	processes     *jobs.ProcessRegistry
+}
+
+// WithProcesses tracks the command under its job in r, so stopping the job
+// interrupts the command. It returns s.
+func (s *ShellCommandRunner) WithProcesses(r *jobs.ProcessRegistry) *ShellCommandRunner {
+	s.processes = r
+	return s
 }
 
 func NewShellCommandRunner(
@@ -161,6 +169,14 @@ func (s *ShellCommandRunner) RunCommandAsync(ctx command.ProjectContext) (chan<-
 		stderr, _ := s.cmd.StderrPipe()
 		stdin, _ := s.cmd.StdinPipe()
 
+		// A stopped job runs no further commands.
+		if err := s.processes.Err(ctx.JobID); err != nil {
+			ctx.Log.Info("not starting %q because the job was stopped", s.describe())
+			outCh <- Line{Err: err}
+			return
+		}
+		s.processes.Prepare(s.cmd)
+
 		ctx.Log.Debug("starting '%s' in '%s'", s.describe(), s.workingDir)
 		err := s.cmd.Start()
 		if err != nil {
@@ -169,6 +185,11 @@ func (s *ShellCommandRunner) RunCommandAsync(ctx command.ProjectContext) (chan<-
 			outCh <- Line{Err: err}
 			return
 		}
+		untrack := s.processes.Track(ctx.JobID, s.cmd, func(msg string) {
+			if s.streamOutput {
+				s.outputHandler.Send(ctx, msg, false)
+			}
+		})
 
 		// If we get anything on inCh, write it to stdin.
 		// This function will exit when inCh is closed which we do in our defer.
@@ -233,13 +254,14 @@ func (s *ShellCommandRunner) RunCommandAsync(ctx command.ProjectContext) (chan<-
 
 		// Wait for the command to complete.
 		err = s.cmd.Wait()
+		untrack()
 
 		dur := time.Since(start)
 		log := ctx.Log.With("duration", dur)
 
 		// We're done now. Send an error if there was one.
 		if err != nil {
-			err = fmt.Errorf("running %s in '%s': %w", s.describeSplit(), s.workingDir, err)
+			err = s.processes.Wrap(ctx.JobID, fmt.Errorf("running %s in '%s': %w", s.describeSplit(), s.workingDir, err))
 			log.Err("%s", err.Error())
 			outCh <- Line{Err: err}
 		} else {

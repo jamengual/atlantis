@@ -99,6 +99,17 @@ func (h *Handler) allows(r *http.Request, action webauth.Action, repoID string) 
 	return h.policy().Allows(p.AsSubject(), p.Base, action, repoID)
 }
 
+// canStopJob reports whether the request's principal may stop a job. When
+// the job's VCS host is unknown, the repo rules can't be matched reliably, so
+// only admins may stop it.
+func (h *Handler) canStopJob(r *http.Request, j Job) bool {
+	if j.Repo.VCSHost == "" {
+		p := webauth.FromContext(r.Context())
+		return p != nil && max(p.Base, h.policy().GlobalRole(p.AsSubject())) >= webauth.RoleAdmin
+	}
+	return h.allows(r, webauth.ActionStopJob, repoID(j.Repo))
+}
+
 // repoID is the server-side repo config ID of a repository.
 func repoID(r Repository) string {
 	if r.VCSHost == "" {
@@ -143,6 +154,8 @@ func (h *Handler) Register(r *mux.Router) {
 	ui.Handle("/locks/discard", csrf.Handler(h.guard(webauth.ActionView, h.discardLocks))).Methods(http.MethodPost)
 	ui.Handle("/applies/lock", csrf.Handler(h.guard(webauth.ActionLockApplies, h.lockApplies))).Methods(http.MethodPost)
 	ui.Handle("/applies/unlock", csrf.Handler(h.guard(webauth.ActionLockApplies, h.unlockApplies))).Methods(http.MethodPost)
+	// Stopping is checked per job, against the job's repository.
+	ui.Handle("/jobs/{id}/stop", csrf.Handler(h.guard(webauth.ActionView, h.stopJob))).Methods(http.MethodPost)
 }
 
 // signInPages reports whether users sign in on Atlantis's own pages, as
@@ -269,6 +282,7 @@ func (h *Handler) metaWith(r *http.Request, l loaded, title, nav string, crumbs 
 		Caps:      h.Store.Capabilities(),
 		Principal: webauth.FromContext(ctx),
 		can:       func(a webauth.Action, repo string) bool { return h.allows(r, a, repo) },
+		canStop:   func(j Job) bool { return h.canStopJob(r, j) },
 		SignOut:   h.signInPages(),
 		Flash:     flashMessage(r.URL.Query()),
 	}
@@ -461,7 +475,7 @@ func (h *Handler) job(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		m := h.meta(r, "Job not found", "jobs", jobsCrumb, crumb{Label: "Not found"})
 		h.render(w, r, http.StatusNotFound, errorPage(m, "This replica has no output for that job",
-			"Job output lives in memory on the replica that ran it and is cleared on restart. Try reloading; a load balancer may route you to another replica."))
+			"Job output lives in memory on the replica that ran it and is cleared on restart, and only that replica can show or stop the job. Try reloading; a load balancer may route you to another replica."))
 		return
 	}
 	m := h.meta(r, jobLabel(j), "jobs", jobsCrumb, crumb{Label: jobLabel(j)})
@@ -485,6 +499,9 @@ var flashes = map[string]string{
 	"applies-locked":   "Applies locked. Every atlantis apply fails until applies are unlocked.",
 	"applies-unlocked": "Applies unlocked.",
 	"none-selected":    "Select at least one lock to unlock.",
+	"stop-requested":   "Stop requested. Terraform got an interrupt and stops once the operations in progress finish, then releases its state lock. The pull request shows the job as failed.",
+	"already-stopping": "Someone already stopped this job. It ends once Terraform exits.",
+	"stop-finished":    "That job had already finished, so there was nothing to stop.",
 }
 
 func flashMessage(q url.Values) string {
@@ -618,6 +635,45 @@ func (h *Handler) unlockApplies(w http.ResponseWriter, r *http.Request) {
 	h.redirectBack(w, r, "/locks", url.Values{"done": {"applies-unlocked"}})
 }
 
+// stopJob interrupts a job running on this replica. Only this replica knows
+// the job's processes, so a job it has no record of can't be stopped here.
+func (h *Handler) stopJob(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	j, ok := h.Store.GetJob(r.Context(), id)
+	if !ok {
+		http.Error(w, "This replica isn't running that job, so it can't stop it. Only the replica that runs a job can stop it, and a load balancer may have sent you to another one. Reload the job page and try again.", http.StatusNotFound)
+		return
+	}
+	repo := repoID(j.Repo)
+	if !h.canStopJob(r, j) {
+		h.forbidden(w, r, webauth.ActionStopJob, repo)
+		return
+	}
+	back := "/jobs/" + url.PathEscape(id)
+	if j.Done {
+		h.redirectBack(w, r, back, url.Values{"done": {"stop-finished"}})
+		return
+	}
+	who := actor(r)
+	if who == "" {
+		// Without sign-in or basic auth there is no name to give.
+		who = "an anonymous user"
+	}
+	stop, first, err := h.Actions.StopJob(id, who)
+	if err != nil {
+		h.Logger.Err("web ui stopping job %q: %s", id, err)
+		http.Error(w, fmt.Sprintf("Stopping the job failed: %s. Restart the command from the pull request if it must not finish.", err), http.StatusInternalServerError)
+		return
+	}
+	if !first {
+		h.Logger.Info("web ui stop of job %q ignored, already stopped by %q %s", id, stop.By, auditFields(r))
+		h.redirectBack(w, r, back, url.Values{"done": {"already-stopping"}})
+		return
+	}
+	h.Logger.Info("web ui stopped job %q repo=%q pull=%d step=%q dir=%q workspace=%q %s", id, repo, j.PullNum, j.Step, j.Dir, j.Workspace, auditFields(r))
+	h.redirectBack(w, r, back, url.Values{"done": {"stop-requested"}})
+}
+
 // ---------- log stream ----------
 
 // jobEvents streams a job's output as server-sent events. Each line is one
@@ -644,7 +700,12 @@ func (h *Handler) jobEvents(w http.ResponseWriter, r *http.Request) {
 	if s.write("retry: 3000\n\n") != nil || s.flush() != nil {
 		return
 	}
-	streamLines(ctx, s, h.Store.JobLog(ctx, id, from), h.heartbeat())
+	streamLines(ctx, s, h.Store.JobLog(ctx, id, from), h.heartbeat(), func() string {
+		if j, ok := h.Store.GetJob(ctx, id); ok && j.Stop != nil {
+			return "Stopped by " + j.Stop.By
+		}
+		return ""
+	})
 }
 
 func (h *Handler) heartbeat() time.Duration {
@@ -684,7 +745,9 @@ func (s *sseWriter) flush() error {
 	return err
 }
 
-func streamLines(ctx context.Context, s *sseWriter, lines <-chan LogLine, beat time.Duration) {
+// streamLines sends lines as events, then a "done" event whose data is the
+// job's final status, such as who stopped it, or empty.
+func streamLines(ctx context.Context, s *sseWriter, lines <-chan LogLine, beat time.Duration, status func() string) {
 	ticker := time.NewTicker(beat)
 	defer ticker.Stop()
 	for {
@@ -698,7 +761,11 @@ func streamLines(ctx context.Context, s *sseWriter, lines <-chan LogLine, beat t
 		case line, ok := <-lines:
 			if !ok {
 				if ctx.Err() == nil {
-					_ = s.write("event: done\ndata: \n\n")
+					done := ""
+					if status != nil {
+						done = strings.NewReplacer("\r", " ", "\n", " ").Replace(status())
+					}
+					_ = s.write("event: done\ndata: " + done + "\n\n")
 					_ = s.flush()
 				}
 				return
@@ -826,6 +893,8 @@ func (h *Handler) access(w http.ResponseWriter, r *http.Request) {
 			Role:       max(p.Base, pol.RoleIn(p.AsSubject(), id)),
 			NeedUnlock: pol.Requires(webauth.ActionUnlock, id),
 			CanUnlock:  h.allows(r, webauth.ActionUnlock, id),
+			NeedStop:   pol.Requires(webauth.ActionStopJob, id),
+			CanStop:    h.allows(r, webauth.ActionStopJob, id),
 		})
 	}
 	if pulls, err := h.Store.ListPulls(ctx); err == nil {

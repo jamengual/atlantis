@@ -120,9 +120,9 @@ type ApplyLock struct {
 	Since   time.Time
 }
 
-// Job is one command run for a project, such as a plan or an apply. Jobs from
-// the in-memory output handler carry no VCS host, so they are matched to pull
-// requests by repository name only.
+// Job is one command run for a project, such as a plan or an apply. Jobs are
+// matched to pull requests by repository name, and carry the VCS host when
+// the output handler recorded it.
 type Job struct {
 	ID          string
 	Repo        Repository
@@ -138,6 +138,30 @@ type Job struct {
 	Stalled    bool
 	LastOutput time.Time
 	Lines      int
+	// Stop says who stopped the job, if anyone did.
+	Stop *JobStop
+}
+
+// JobStop records a request to stop a job.
+type JobStop struct {
+	By string
+	At time.Time
+	// Killed is true when the job's process ignored the interrupt and was
+	// killed, so Terraform may still hold its state lock.
+	Killed bool
+}
+
+// Running reports whether the job is still running, as far as this replica
+// knows.
+func (j Job) Running() bool {
+	return !j.Done && !j.Stalled
+}
+
+// Stoppable reports whether the job can be stopped: it hasn't finished and
+// nobody has stopped it yet. A stalled job counts, since its process may
+// still be alive.
+func (j Job) Stoppable() bool {
+	return !j.Done && j.Stop == nil
 }
 
 // JobFilter narrows ListJobs.
@@ -249,4 +273,8 @@ type Actions interface {
 	DiscardLock(id string, actor string) (bool, error)
 	LockApplies() error
 	UnlockApplies() error
+	// StopJob interrupts a job running on this replica on behalf of actor.
+	// It returns the stop and whether this call made it; when the job was
+	// already stopped, it returns the earlier stop.
+	StopJob(id string, actor string) (JobStop, bool, error)
 }

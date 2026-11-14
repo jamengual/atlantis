@@ -36,6 +36,7 @@ access:
   default: none
   permissions:
     unlock: Admin
+    stop_job: Admin
     lock_applies: admin
   enforce_in_pr_comments: true
 repos:
@@ -47,6 +48,7 @@ repos:
           - group: data-eng
       permissions:
         unlock: operator
+        stop_job: operator
 `)
 	Ok(t, err)
 	Assert(t, cfg.Access != nil, "access section was not parsed")
@@ -56,13 +58,14 @@ repos:
 		Viewer:   []valid.AccessRule{{Domain: "acme.com"}, {Everyone: true}},
 	}, cfg.Access.Roles)
 	Equals(t, "none", cfg.Access.Default)
-	Equals(t, valid.AccessPermissions{Unlock: "admin", LockApplies: "admin"}, cfg.Access.Permissions)
+	Equals(t, valid.AccessPermissions{Unlock: "admin", LockApplies: "admin", StopJob: "admin"}, cfg.Access.Permissions)
 	Equals(t, true, cfg.Access.EnforceInPRComments)
 
 	repo := cfg.MatchingRepo("github.com/acme/data-lake")
 	Assert(t, repo.Access != nil, "per-repo access was not parsed")
 	Equals(t, []valid.AccessRule{{Group: "data-eng"}}, repo.Access.Roles.Operator)
 	Equals(t, "operator", repo.Access.Permissions.Unlock)
+	Equals(t, "operator", repo.Access.Permissions.StopJob)
 }
 
 func TestParseGlobalCfg_NoAccess(t *testing.T) {
@@ -84,6 +87,10 @@ func TestParseGlobalCfg_AccessErrors(t *testing.T) {
 		"unknown default":             {"access:\n  default: superuser\n", "unknown role"},
 		"per-repo view":               {"repos:\n  - id: /.*/\n    access:\n      permissions:\n        view: viewer\n", "viewing is set for the whole server"},
 		"per-repo apply lock":         {"repos:\n  - id: /.*/\n    access:\n      permissions:\n        lock_applies: operator\n", "the apply lock covers every repo"},
+		"stop job needs none":         {"access:\n  permissions:\n    stop_job: none\n", "access.permissions.stop_job: an action can't require the none role"},
+		"unknown stop job role":       {"access:\n  permissions:\n    stop_job: root\n", "access.permissions.stop_job: unknown role"},
+		"per-repo stop job none":      {"repos:\n  - id: /.*/\n    access:\n      permissions:\n        stop_job: none\n", "permissions.stop_job: an action can't require the none role"},
+		"per-repo stop job unknown":   {"repos:\n  - id: /.*/\n    access:\n      permissions:\n        stop_job: boss\n", "permissions.stop_job: unknown role"},
 		"unknown key":                 {"access:\n  roles:\n    admin:\n      - team: x\n", "team"},
 	}
 	for name, tc := range cases {

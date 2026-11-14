@@ -22,15 +22,25 @@ const (
 	ActionUnlock Action = "unlock"
 	// ActionLockApplies is locking or unlocking applies for every repo.
 	ActionLockApplies Action = "lock_applies"
+	// ActionStopJob is stopping a running plan, apply, policy check, or
+	// workflow hook.
+	ActionStopJob Action = "stop_job"
 )
 
 // Actions lists every action, in the order the UI explains them.
-var Actions = []Action{ActionView, ActionUnlock, ActionLockApplies}
+var Actions = []Action{ActionView, ActionUnlock, ActionStopJob, ActionLockApplies}
 
 var defaultRequirements = map[Action]Role{
 	ActionView:        RoleViewer,
 	ActionUnlock:      RoleOperator,
+	ActionStopJob:     RoleOperator,
 	ActionLockApplies: RoleAdmin,
+}
+
+// PerRepo reports whether the action is checked against a repository, so
+// that repos entries can grant it or require a different role for it.
+func (a Action) PerRepo() bool {
+	return a == ActionUnlock || a == ActionStopJob
 }
 
 // Describe says what an action lets someone do.
@@ -42,6 +52,8 @@ func (a Action) Describe() string {
 		return "Unlock projects and discard their plans"
 	case ActionLockApplies:
 		return "Lock and unlock applies for every repository"
+	case ActionStopJob:
+		return "Stop running plans, applies, and hooks"
 	}
 	return string(a)
 }
@@ -132,7 +144,8 @@ type repoPolicy struct {
 	label   string
 	matches func(repoID string) bool
 	roles   roleRules
-	unlock  Role // RoleNone means the global requirement
+	// requirements replace the global ones for matching repos, per action.
+	requirements map[Action]Role
 }
 
 // Policy decides what each person may do, globally and per repository.
@@ -225,7 +238,7 @@ func NewPolicy(c PolicyConfig) (*Policy, error) {
 		for _, req := range []struct {
 			action Action
 			value  string
-		}{{ActionView, a.Permissions.View}, {ActionUnlock, a.Permissions.Unlock}, {ActionLockApplies, a.Permissions.LockApplies}} {
+		}{{ActionView, a.Permissions.View}, {ActionUnlock, a.Permissions.Unlock}, {ActionStopJob, a.Permissions.StopJob}, {ActionLockApplies, a.Permissions.LockApplies}} {
 			if req.value == "" {
 				continue
 			}
@@ -238,10 +251,16 @@ func NewPolicy(c PolicyConfig) (*Policy, error) {
 		if repo.Access == nil {
 			continue
 		}
-		rp := repoPolicy{label: repo.IDString(), matches: repo.IDMatches, roles: accessRoles(repo.Access.Roles)}
-		if repo.Access.Permissions.Unlock != "" {
-			if rp.unlock, err = ParseRole(repo.Access.Permissions.Unlock); err != nil {
-				return nil, fmt.Errorf("repos[%s].access.permissions.unlock: %w", rp.label, err)
+		rp := repoPolicy{label: repo.IDString(), matches: repo.IDMatches, roles: accessRoles(repo.Access.Roles), requirements: map[Action]Role{}}
+		for _, req := range []struct {
+			action Action
+			value  string
+		}{{ActionUnlock, repo.Access.Permissions.Unlock}, {ActionStopJob, repo.Access.Permissions.StopJob}} {
+			if req.value == "" {
+				continue
+			}
+			if rp.requirements[req.action], err = ParseRole(req.value); err != nil {
+				return nil, fmt.Errorf("repos[%s].access.permissions.%s: %w", rp.label, req.action, err)
 			}
 		}
 		p.repos = append(p.repos, rp)
@@ -281,17 +300,17 @@ func (p *Policy) RoleIn(s Subject, repoID string) Role {
 	return role
 }
 
-// Requires returns the role an action needs in a repository. For unlock,
-// the last matching repo entry that sets a requirement wins, as with other
-// server-side repo settings. Other actions are global.
+// Requires returns the role an action needs in a repository. For per-repo
+// actions, the last matching repo entry that sets a requirement wins, as
+// with other server-side repo settings. Other actions are global.
 func (p *Policy) Requires(action Action, repoID string) Role {
 	need := p.requirements[action]
-	if action != ActionUnlock || repoID == "" {
+	if !action.PerRepo() || repoID == "" {
 		return need
 	}
 	for _, rp := range p.repos {
-		if rp.unlock != RoleNone && rp.matches(repoID) {
-			need = rp.unlock
+		if r := rp.requirements[action]; r != RoleNone && rp.matches(repoID) {
+			need = r
 		}
 	}
 	return need
@@ -301,7 +320,7 @@ func (p *Policy) Requires(action Action, repoID string) Role {
 // is a role held regardless of rules, such as the basic-auth user's, and is
 // RoleNone for people who signed in.
 func (p *Policy) Allows(s Subject, base Role, action Action, repoID string) bool {
-	if action != ActionUnlock {
+	if !action.PerRepo() {
 		repoID = ""
 	}
 	return max(base, p.RoleIn(s, repoID)) >= p.Requires(action, repoID)
@@ -378,9 +397,10 @@ type RoleSummary struct {
 
 // RepoSummary describes one repos entry's access settings.
 type RepoSummary struct {
-	Match  string
-	Roles  []RoleSummary
-	Unlock Role
+	Match   string
+	Roles   []RoleSummary
+	Unlock  Role
+	StopJob Role
 }
 
 func summarizeRoles(r roleRules) []RoleSummary {
@@ -408,7 +428,7 @@ func (p *Policy) Summarize() Summary {
 		s.Requirements = append(s.Requirements, RequirementSummary{Action: a, Role: p.requirements[a]})
 	}
 	for _, rp := range p.repos {
-		s.Repos = append(s.Repos, RepoSummary{Match: rp.label, Roles: summarizeRoles(rp.roles), Unlock: rp.unlock})
+		s.Repos = append(s.Repos, RepoSummary{Match: rp.label, Roles: summarizeRoles(rp.roles), Unlock: rp.requirements[ActionUnlock], StopJob: rp.requirements[ActionStopJob]})
 	}
 	return s
 }

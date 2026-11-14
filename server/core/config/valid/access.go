@@ -45,4 +45,5 @@ type AccessPermissions struct {
 	View        string
 	Unlock      string
 	LockApplies string
+	StopJob     string
 }
