@@ -33,6 +33,8 @@ type JobIDInfo struct {
 	Time           time.Time
 	TimeFormatted  string
 	JobStep        string
+	// VCSHost is the hostname of the job's repository, such as github.com.
+	VCSHost string
 }
 
 type PullInfoWithJobIDs struct {
@@ -45,6 +47,7 @@ type JobInfo struct {
 	HeadCommit     string
 	JobDescription string
 	JobStep        string
+	VCSHost        string
 }
 
 type ProjectCmdOutputLine struct {
@@ -155,6 +158,7 @@ func (p *AsyncProjectCommandOutputHandler) Send(ctx command.ProjectContext, msg 
 				Workspace:    ctx.Workspace,
 			},
 			JobStep: ctx.CommandName.String(),
+			VCSHost: ctx.BaseRepo.VCSHost.Hostname,
 		},
 		Line:              msg,
 		OperationComplete: operationComplete,
@@ -173,6 +177,7 @@ func (p *AsyncProjectCommandOutputHandler) SendWorkflowHook(ctx models.WorkflowH
 			},
 			JobDescription: ctx.HookDescription,
 			JobStep:        ctx.HookStepName,
+			VCSHost:        ctx.BaseRepo.VCSHost.Hostname,
 		},
 		Line:              msg,
 		OperationComplete: operationComplete,
@@ -201,6 +206,7 @@ func (p *AsyncProjectCommandOutputHandler) Handle() {
 			JobDescription: msg.JobInfo.JobDescription,
 			Time:           time.Now(),
 			JobStep:        msg.JobInfo.JobStep,
+			VCSHost:        msg.JobInfo.VCSHost,
 		})
 
 		// Forward new message to all receiver channels and output buffer

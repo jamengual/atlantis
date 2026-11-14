@@ -373,6 +373,10 @@ type DefaultProjectCommandRunner struct {
 	// repository is cloned, so that a committed symlink cannot point a
 	// repository-relative path at a file outside the clone.
 	VarFileAllowlistChecker *VarFileAllowlistChecker
+	// Processes knows which jobs were stopped from the web UI. A stopped
+	// job runs no further steps, and a stopped plan leaves no plan to apply.
+	// Nil means jobs can't be stopped.
+	Processes *jobs.ProcessRegistry
 }
 
 // checkVarFilesResolved rejects comment var-file arguments that resolve, with
@@ -892,6 +896,15 @@ func (p *DefaultProjectCommandRunner) doPlan(ctx command.ProjectContext) (*model
 
 	outputs, err := p.runSteps(ctx.Steps, ctx, projAbsPath)
 
+	// A stopped plan fails even when Terraform finished before the
+	// interrupt arrived, and its plan file is removed, so nothing from it
+	// can be applied.
+	if stopErr := p.Processes.Err(ctx.JobID); stopErr != nil {
+		p.discardStoppedPlan(ctx, projAbsPath)
+		if err == nil {
+			err = stopErr
+		}
+	}
 	if err != nil {
 		if unlockErr := lockAttempt.UnlockFn(); unlockErr != nil {
 			ctx.Log.Err("error unlocking state after plan error: %v", unlockErr)
@@ -915,6 +928,26 @@ func (p *DefaultProjectCommandRunner) doPlan(ctx command.ProjectContext) (*model
 		MergedAgain:     mergedAgain,
 		PlanHash:        planHash,
 	}, "", nil
+}
+
+// discardStoppedPlan removes the plan file of a stopped plan, locally and in
+// the plan store.
+func (p *DefaultProjectCommandRunner) discardStoppedPlan(ctx command.ProjectContext, projAbsPath string) {
+	ctx.Log.Info("discarding the plan because the job was stopped")
+	if err := p.WorkingDir.DeletePlan(ctx.Log, ctx.Pull.BaseRepo, ctx.Pull, ctx.Workspace, ctx.RepoRelDir, ctx.ProjectName); err != nil {
+		ctx.Log.Err("deleting the plan of a stopped job: %s", err)
+	}
+	if p.PlanStore == nil {
+		return
+	}
+	planPath, err := safePlanFilePath(ctx, projAbsPath)
+	if err != nil {
+		ctx.Log.Err("finding the plan of a stopped job: %s", err)
+		return
+	}
+	if err := p.PlanStore.Remove(ctx, planPath); err != nil {
+		ctx.Log.Err("removing the plan of a stopped job from the plan store: %s", err)
+	}
 }
 
 // planStagePlanHash hashes the convention plan file the built-in plan step
@@ -1233,6 +1266,10 @@ func (p *DefaultProjectCommandRunner) runSteps(steps []valid.Step, ctx command.P
 
 	envs := make(map[string]string)
 	for _, step := range steps {
+		// A job stopped from the web UI runs no further steps.
+		if err := p.Processes.Err(ctx.JobID); err != nil {
+			return outputs, err
+		}
 		var out string
 		var err error
 		switch step.StepName {

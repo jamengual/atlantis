@@ -144,6 +144,20 @@ h2 { font-size: 15px; margin: 0; }
 /* running jobs */
 .job { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 11px 14px; border-bottom: 1px solid var(--rule); color: var(--ink); text-decoration: none; align-items: center; }
 .job:hover { background: var(--sunk); }
+.jobrow { display: flex; align-items: center; border-bottom: 1px solid var(--rule); }
+.jobrow > .job { flex: 1; min-width: 0; border-bottom: 0; }
+.jobrow > details.confirm { margin-right: 14px; }
+
+/* stopped jobs */
+.stopnote { padding: 12px 14px; border-color: color-mix(in oklab, var(--chg) 40%, var(--rule)); background: var(--chg-soft); }
+.stopnote.killed { border-color: color-mix(in oklab, var(--del) 40%, var(--rule)); background: var(--del-soft); }
+.stopnote p { margin: 0; }
+.stopby { display: block; margin-top: 2px; }
+.tbl td.act { text-align: right; width: 1%; white-space: nowrap; }
+/* Table cells sit in a scroll box that would clip a floating popover, so a
+   confirmation in a table opens in place and the row grows to fit it. */
+.tbl td.act details.confirm[open] { white-space: normal; }
+.tbl td.act .inline-confirm { position: static; margin-top: 8px; width: 280px; max-width: 70vw; text-align: left; box-shadow: none; }
 
 /* banners and confirms */
 .banner { display: flex; gap: 12px; align-items: center; padding: 12px 14px; border-radius: var(--r-m); border: 1px solid var(--rule); background: var(--surface); flex-wrap: wrap; }

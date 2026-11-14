@@ -6,6 +6,7 @@ package webui
 import (
 	"cmp"
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -73,6 +74,8 @@ type LegacyStore struct {
 	// PlanLimits bounds the plan details kept for a page. Defaults to
 	// DefaultPlanLimits.
 	PlanLimits PlanLimits
+	// Stops says which jobs were stopped. Nil means none were.
+	Stops JobStops
 
 	changesCache sync.Map // job ID -> Changes
 	countsCache  sync.Map // plan JSON path -> cachedCounts
@@ -343,6 +346,15 @@ func (s *LegacyStore) ApplyLock(_ context.Context) (ApplyLock, error) {
 	return ApplyLock{Locked: l.Locked, Enabled: l.GlobalApplyLockEnabled, Since: l.Time}, nil
 }
 
+// JobStops reports stopped jobs. *jobs.ProcessRegistry implements it.
+type JobStops interface {
+	Stopped(jobID string) (jobs.StopInfo, bool)
+}
+
+func toJobStop(info jobs.StopInfo) *JobStop {
+	return &JobStop{By: info.By, At: info.At, Killed: info.Killed}
+}
+
 func (s *LegacyStore) ListJobs(_ context.Context, f JobFilter) []Job {
 	reader, _ := s.Jobs.(outputBufferReader)
 	var out []Job
@@ -356,7 +368,7 @@ func (s *LegacyStore) ListJobs(_ context.Context, f JobFilter) []Job {
 		for _, info := range m.JobIDInfos {
 			j := Job{
 				ID:          info.JobID,
-				Repo:        Repository{FullName: m.Pull.RepoFullName},
+				Repo:        Repository{VCSHost: info.VCSHost, FullName: m.Pull.RepoFullName},
 				PullNum:     m.Pull.PullNum,
 				Dir:         m.Pull.Path,
 				Workspace:   m.Pull.Workspace,
@@ -371,6 +383,11 @@ func (s *LegacyStore) ListJobs(_ context.Context, f JobFilter) []Job {
 				j.Lines = len(buf.Buffer)
 			}
 			j.Stalled = !j.Done && s.now().Sub(j.LastOutput) > staleJobAfter
+			if s.Stops != nil {
+				if stop, ok := s.Stops.Stopped(info.JobID); ok {
+					j.Stop = toJobStop(stop)
+				}
+			}
 			if f.RunningOnly && (j.Done || j.Stalled) {
 				continue
 			}
@@ -451,6 +468,11 @@ type LegacyActions struct {
 		DiscardLock(id string, actor string) (*models.ProjectLock, error)
 	}
 	ApplyLocker locking.ApplyLocker
+	// Stopper stops jobs running on this replica. *jobs.ProcessRegistry
+	// implements it. Nil means jobs can't be stopped.
+	Stopper interface {
+		Stop(jobID, by string) (jobs.StopInfo, bool)
+	}
 }
 
 var _ Actions = (*LegacyActions)(nil)
@@ -467,4 +489,15 @@ func (a *LegacyActions) LockApplies() error {
 
 func (a *LegacyActions) UnlockApplies() error {
 	return a.ApplyLocker.UnlockApply()
+}
+
+// ErrStopUnavailable is returned when this replica can't stop jobs.
+var ErrStopUnavailable = errors.New("this replica doesn't track job processes")
+
+func (a *LegacyActions) StopJob(id string, actor string) (JobStop, bool, error) {
+	if a.Stopper == nil {
+		return JobStop{}, false, ErrStopUnavailable
+	}
+	info, first := a.Stopper.Stop(id, actor)
+	return *toJobStop(info), first, nil
 }

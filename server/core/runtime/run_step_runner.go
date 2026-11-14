@@ -28,6 +28,9 @@ type RunStepRunner struct {
 	// TerraformBinDir is the directory where Atlantis downloads Terraform binaries.
 	TerraformBinDir         string
 	ProjectCmdOutputHandler jobs.ProjectCommandOutputHandler
+	// Processes tracks run steps by job, so stopping a job interrupts them.
+	// Nil tracks nothing.
+	Processes *jobs.ProcessRegistry
 }
 
 func (r *RunStepRunner) Run(
@@ -100,7 +103,7 @@ func (r *RunStepRunner) Run(
 		finalEnvVars = append(finalEnvVars, fmt.Sprintf("%s=%s", key, val))
 	}
 
-	runner := models.NewShellCommandRunner(shell, command, finalEnvVars, path, streamOutput, r.ProjectCmdOutputHandler)
+	runner := models.NewShellCommandRunner(shell, command, finalEnvVars, path, streamOutput, r.ProjectCmdOutputHandler).WithProcesses(r.Processes)
 	output, err := runner.Run(ctx)
 
 	// Post-process before the error check so that a failing command never

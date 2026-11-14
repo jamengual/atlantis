@@ -104,6 +104,25 @@ type fakeActions struct {
 	unlocked  int
 	missing   map[string]bool
 	err       error
+	// stops records StopJob calls by job ID, with the actor.
+	stops   map[string]string
+	stopErr error
+}
+
+func (f *fakeActions) StopJob(id, actor string) (webui.JobStop, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.stopErr != nil {
+		return webui.JobStop{}, false, f.stopErr
+	}
+	if by, ok := f.stops[id]; ok {
+		return webui.JobStop{By: by, At: now}, false, nil
+	}
+	if f.stops == nil {
+		f.stops = map[string]string{}
+	}
+	f.stops[id] = actor
+	return webui.JobStop{By: actor, At: now}, true, nil
 }
 
 func (f *fakeActions) DiscardLock(id, actor string) (bool, error) {
@@ -396,6 +415,11 @@ func readEvents(t *testing.T, srv *httptest.Server, path string, lastID string) 
 		b.WriteString(sc.Text())
 		b.WriteString("\n")
 		if strings.HasPrefix(sc.Text(), "event: done") {
+			// Keep the done event's data line, the job's final status.
+			if sc.Scan() {
+				b.WriteString(sc.Text())
+				b.WriteString("\n")
+			}
 			break
 		}
 	}

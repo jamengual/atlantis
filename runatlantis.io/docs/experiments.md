@@ -103,11 +103,25 @@ Results currently use in-memory storage and are lost on restart. Drift detection
 
 ## Web UI
 
-Add `web-ui` to `experiments` to serve a new web UI at `/ui`. The existing UI at `/` is unchanged. The new UI shows pull requests with per-project status and plan changes, project locks with single and bulk unlock, the global apply lock, live job logs, and the health of the replica serving the page.
+Add `web-ui` to `experiments` to serve a new web UI at `/ui`. The existing UI at `/` is unchanged. The new UI shows pull requests with per-project status and plan changes, project locks with single and bulk unlock, the global apply lock, live job logs with a way to stop a running job, and the health of the replica serving the page.
 
-Without [web UI sign-in](#web-ui-sign-in), the UI uses the same access control as the existing UI: [basic auth](server-configuration.md#web-basic-auth) when enabled, and nothing otherwise. In that case anyone who can reach `/ui` can discard plans and lock applies. Actions reject cross-origin requests, and pages are served with a Content Security Policy that blocks inline scripts and styles. The pull request comment for a discarded plan names the user who discarded it.
+Without [web UI sign-in](#web-ui-sign-in), the UI uses the same access control as the existing UI: [basic auth](server-configuration.md#web-basic-auth) when enabled, and nothing otherwise. In that case anyone who can reach `/ui` can discard plans, stop jobs, and lock applies. Actions reject cross-origin requests, and pages are served with a Content Security Policy that blocks inline scripts and styles. The pull request comment for a discarded plan names the user who discarded it.
 
 Locks, the apply lock, and pull request status come from the locking database, so every replica shows the same values. Job lists and logs live in memory on the replica that ran the job and are cleared on restart. With several replicas behind a load balancer, a job page may show "no output" when the request reaches a different replica. The pages are built on the [ADR 0005](/contributing/adr/0005-use-durable-storage-with-one-data-model.md) data model so that durable storage can add history, cluster-wide jobs, and an audit log without changing them.
+
+### Stopping a running job
+
+A running plan, apply, policy check, or workflow hook has a **Stop** button on its job page and in the job lists. Stopping a job works like pressing Ctrl-C in a terminal:
+
+1. Atlantis sends an interrupt (`SIGINT`) to the job's process and everything it started. Terraform stops scheduling new work, waits for the operations in progress, saves state, and releases its state lock, so a stop normally leaves no lock behind. Creating or destroying some resources takes minutes, and Terraform waits for them.
+2. The job runs no further steps. A stopped plan fails and its plan file is deleted, even when Terraform finished just as the interrupt arrived, so nothing from it can be applied. A stopped apply is reported as failed. Run `atlantis plan` again to continue.
+3. If the process is still running 10 minutes after the interrupt, Atlantis kills it. Terraform can't release its state lock then, and resources it was creating may be missing from state. The job page and log say so; check the backend and run `terraform force-unlock` if needed.
+
+The job log and page say who stopped the job, and the pull request comment for the failed plan or apply names them. Atlantis logs every stop with the user's identity.
+
+Stopping needs the operator role by default. Set `access.permissions.stop_job`, or `permissions.stop_job` on a `repos` entry, to change that (see [the access policy](#access-policy-in-the-server-side-repo-config)).
+
+Each job runs on one replica, and only that replica can stop it. With several replicas behind a load balancer, a request that reaches another replica is told that replica isn't running the job; try again. Atlantis only tracks processes to stop when the `web-ui` experiment is on; it starts each Terraform command in its own process group then. On Windows, stopping a job kills its process right away.
 
 To disable the new UI, remove `web-ui` from `experiments` and restart. Routes under `/ui` then return HTTP 404.
 
@@ -133,7 +147,7 @@ Web UI sign-in replaces basic auth for the pages at `/ui` with your identity pro
 | Role | Can |
 | --- | --- |
 | Viewer | See pull requests, plans, locks, and job logs |
-| Operator | Also discard plans and unlock projects |
+| Operator | Also discard plans, unlock projects, and stop running jobs |
 | Admin | Also lock and unlock applies for every repository |
 
 Roles come from [`--web-role-admins`](server-configuration.md#web-role-admins), [`--web-role-operators`](server-configuration.md#web-role-operators), and [`--web-role-viewers`](server-configuration.md#web-role-viewers). Each rule is `group:NAME` (or a bare `NAME`) for your identity provider's groups, `github:ORG` or `github:ORG/TEAM` for GitHub, `email:ADDRESS`, `domain:example.com`, or `*` for everyone who signed in. Email and domain rules only match emails the provider marks as verified. The highest matching role wins. People who match no rule are turned away unless you set [`--web-role-default`](server-configuration.md#web-role-default). Atlantis refuses to start with sign-in enabled and no role rules.
@@ -165,6 +179,7 @@ access:
   permissions:                          # optional; these are the defaults
     view: viewer
     unlock: operator
+    stop_job: operator
     lock_applies: admin
   enforce_in_pr_comments: true          # also check "atlantis unlock" comments
 
@@ -174,6 +189,7 @@ repos:
     access:
       permissions:
         unlock: admin                   # stricter on production repos
+        stop_job: admin
   - id: github.com/acme/data-lake
     access:
       roles:
@@ -182,7 +198,7 @@ repos:
 ```
 
 - Each rule matches exactly one of `group`, `github` (`ORG` or `ORG/TEAM`), `github_user`, `email`, `domain`, or `everyone: true`.
-- A `repos` entry can grant extra roles for matching repositories and require a different role to unlock there. Viewing and the apply lock cover the whole server, so they are set only at the top level. When several entries match, the last one's unlock requirement wins, as with other repo settings.
+- A `repos` entry can grant extra roles for matching repositories and require a different role to unlock or to stop jobs there. Viewing and the apply lock cover the whole server, so they are set only at the top level. When several entries match, the last one that sets a requirement wins, as with other repo settings.
 - With `enforce_in_pr_comments: true`, an `atlantis unlock` comment is checked against the same unlock rule, matching the commenter's GitHub user and teams. Identity provider groups and emails don't apply to comments.
 - When sign-in is on, the existing UI's pages redirect to the new UI, and its unlock and apply lock actions follow this policy too.
 - The **Access** page in the UI shows the policy in plain words and what you can do in each repository. Atlantis checks the policy at startup and refuses to start with mistakes such as a rule with two attributes or an unknown role.

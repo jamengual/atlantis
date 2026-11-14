@@ -24,6 +24,7 @@ import (
 //	  default: none
 //	  permissions:
 //	    unlock: operator
+//	    stop_job: operator
 //	    lock_applies: admin
 //	  enforce_in_pr_comments: true
 type Access struct {
@@ -34,7 +35,8 @@ type Access struct {
 }
 
 // RepoAccess is the per-repo access policy under a repos entry. It grants
-// roles for the matching repos and can require a different role to unlock.
+// roles for the matching repos and can require a different role to unlock
+// or to stop jobs.
 type RepoAccess struct {
 	Roles       AccessRoles        `yaml:"roles" json:"roles,omitzero"`
 	Permissions *AccessPermissions `yaml:"permissions,omitempty" json:"permissions,omitempty"`
@@ -60,6 +62,7 @@ type AccessPermissions struct {
 	View        string `yaml:"view,omitempty" json:"view,omitempty"`
 	Unlock      string `yaml:"unlock,omitempty" json:"unlock,omitempty"`
 	LockApplies string `yaml:"lock_applies,omitempty" json:"lock_applies,omitempty"`
+	StopJob     string `yaml:"stop_job,omitempty" json:"stop_job,omitempty"`
 }
 
 var accessRoleNames = []string{"none", "viewer", "operator", "admin"}
@@ -118,7 +121,7 @@ func (a Access) Validate() error {
 		return err
 	}
 	if a.Permissions != nil {
-		for _, p := range []struct{ name, value string }{{"view", a.Permissions.View}, {"unlock", a.Permissions.Unlock}, {"lock_applies", a.Permissions.LockApplies}} {
+		for _, p := range []struct{ name, value string }{{"view", a.Permissions.View}, {"unlock", a.Permissions.Unlock}, {"stop_job", a.Permissions.StopJob}, {"lock_applies", a.Permissions.LockApplies}} {
 			if err := validRoleName("access.permissions."+p.name, p.value); err != nil {
 				return err
 			}
@@ -145,11 +148,13 @@ func (a RepoAccess) Validate(repoID string) error {
 	if a.Permissions.LockApplies != "" {
 		return fmt.Errorf("%s.permissions.lock_applies: the apply lock covers every repo; set it in the top-level access section", where)
 	}
-	if err := validRoleName(where+".permissions.unlock", a.Permissions.Unlock); err != nil {
-		return err
-	}
-	if strings.EqualFold(a.Permissions.Unlock, "none") {
-		return fmt.Errorf("%s.permissions.unlock: an action can't require the none role", where)
+	for _, p := range []struct{ name, value string }{{"unlock", a.Permissions.Unlock}, {"stop_job", a.Permissions.StopJob}} {
+		if err := validRoleName(where+".permissions."+p.name, p.value); err != nil {
+			return err
+		}
+		if strings.EqualFold(p.value, "none") {
+			return fmt.Errorf("%s.permissions.%s: an action can't require the none role", where, p.name)
+		}
 	}
 	return nil
 }
@@ -180,6 +185,7 @@ func (p *AccessPermissions) toValid() valid.AccessPermissions {
 		View:        strings.ToLower(p.View),
 		Unlock:      strings.ToLower(p.Unlock),
 		LockApplies: strings.ToLower(p.LockApplies),
+		StopJob:     strings.ToLower(p.StopJob),
 	}
 }
 
