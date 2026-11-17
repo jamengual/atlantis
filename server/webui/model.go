@@ -366,6 +366,12 @@ type Capabilities struct {
 	// SharedDrift is true when drift detection results are stored centrally,
 	// so every replica shows every result and they survive restarts.
 	SharedDrift bool
+	// Traces is true when jobs record timing traces.
+	Traces bool
+	// SharedTraces is true when timing traces are stored centrally, so any
+	// replica can show them and they survive restarts. When false, a trace
+	// lives in memory on the replica that ran the job.
+	SharedTraces bool
 }
 
 // ProjectRef identifies a project within a pull request.
@@ -495,6 +501,83 @@ type Store interface {
 	// finished and every line was sent, when the job's output is removed, or
 	// when ctx is done.
 	JobLog(ctx context.Context, id string, from int) <-chan LogLine
+	// JobTrace returns a job's timing trace. Its Status says whether tracing
+	// is off or the store has no trace for the job.
+	JobTrace(ctx context.Context, id string) JobTrace
+}
+
+// TraceStatus says whether a job's timing trace can be shown.
+type TraceStatus string
+
+const (
+	// TraceOff means the server doesn't record traces.
+	TraceOff TraceStatus = "off"
+	// TraceMissing means the store has no trace for the job, for example
+	// because another replica ran it or it ran before a restart.
+	TraceMissing TraceStatus = "missing"
+	// TraceReady means the trace was read.
+	TraceReady TraceStatus = "ready"
+)
+
+// TraceCategory groups spans for display.
+type TraceCategory string
+
+const (
+	TraceJob      TraceCategory = "job"
+	TraceStep     TraceCategory = "step"
+	TraceCommand  TraceCategory = "command"
+	TraceTool     TraceCategory = "tool"
+	TraceProvider TraceCategory = "provider"
+	TraceResource TraceCategory = "resource"
+)
+
+// TraceAttribute is a span attribute. A hidden attribute's value was not
+// kept because it may be sensitive.
+type TraceAttribute struct {
+	Key    string
+	Value  string
+	Hidden bool
+}
+
+// TraceSpan is one timed operation in a job: an Atlantis step, a Terraform
+// command, or work Terraform reported inside it.
+type TraceSpan struct {
+	ID       string
+	ParentID string
+	Name     string
+	Category TraceCategory
+	// Source is "atlantis", or the name the reporting tool gave, such as
+	// "OpenTofu CLI".
+	Source string
+	Start  time.Time
+	// End is zero while the span runs.
+	End        time.Time
+	Error      bool
+	Message    string
+	Attributes []TraceAttribute
+}
+
+// Running reports whether the span hasn't ended.
+func (s TraceSpan) Running() bool {
+	return s.End.IsZero()
+}
+
+// JobTrace is the timing trace of a job.
+type JobTrace struct {
+	Status  TraceStatus
+	TraceID string
+	Spans   []TraceSpan
+	// Dropped counts spans over the per-job limit, which were not kept.
+	Dropped int
+	// Notes explain gaps in the trace.
+	Notes []string
+	// Finished is true once the job's own span ended.
+	Finished bool
+	// AllAttributes is true when every attribute value was kept, not only
+	// the allowlisted ones.
+	AllAttributes bool
+	// Version changes whenever the trace changes.
+	Version uint64
 }
 
 // LogLine is one line of job output. N is its 1-based position in the log.

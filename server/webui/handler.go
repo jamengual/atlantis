@@ -68,6 +68,9 @@ type Handler struct {
 	HeartbeatInterval time.Duration
 	// WriteTimeout bounds each write to a log stream. Defaults to 30s.
 	WriteTimeout time.Duration
+	// TracePollInterval is how often a Timing view's event stream checks
+	// the trace for changes. Defaults to 1s.
+	TracePollInterval time.Duration
 	// Auth signs users in and assigns roles. When nil, the UI relies on the
 	// server's basic auth, or none, and everyone who reaches it is an admin,
 	// as with the existing UI.
@@ -151,6 +154,8 @@ func (h *Handler) Register(r *mux.Router) {
 	ui.Handle("/drift", view(h.drift)).Methods(http.MethodGet)
 	ui.Handle("/jobs/{id}", view(h.job)).Methods(http.MethodGet)
 	ui.Handle("/jobs/{id}/events", view(h.jobEvents)).Methods(http.MethodGet)
+	ui.Handle("/jobs/{id}/timing", view(h.timing)).Methods(http.MethodGet)
+	ui.Handle("/jobs/{id}/timing/events", view(h.traceEvents)).Methods(http.MethodGet)
 	ui.Handle("/replica", view(h.replica)).Methods(http.MethodGet)
 	ui.Handle("/access", view(h.access)).Methods(http.MethodGet)
 

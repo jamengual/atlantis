@@ -87,6 +87,9 @@ type LegacyStore struct {
 	// Drift holds the drift detection API's results. Nil when drift
 	// detection is off.
 	Drift DriftSource
+	// Traces holds job timing traces. Nil when the web-traces experiment is
+	// off.
+	Traces TraceSource
 
 	changesCache sync.Map // job ID -> Changes
 	countsCache  sync.Map // plan JSON path -> cachedCounts
@@ -94,7 +97,7 @@ type LegacyStore struct {
 
 var _ Store = (*LegacyStore)(nil)
 
-func (s *LegacyStore) Capabilities() Capabilities { return Capabilities{} }
+func (s *LegacyStore) Capabilities() Capabilities { return Capabilities{Traces: s.Traces != nil} }
 
 func (s *LegacyStore) Instance(_ context.Context) Instance {
 	inst := Instance{

@@ -39,8 +39,9 @@ Names are lowercase and match exactly. Unknown names, wildcard values, `all`, an
 | [API](api-endpoints.md#main-endpoints) | `api` | Experimental | Plan/apply: v0.19.8+. Experiment gate: unreleased (Main only). | Requires `api`; authenticated commands also require `api-secret` | [ADR 0002](/contributing/adr/0002-api-enhancement-drift-detection.md) | [API development #6162](https://github.com/runatlantis/atlantis/issues/6162) |
 | [Drift detection](api-endpoints.md#drift-detection-and-remediation-alpha) | `drift-detection` | Experimental | Legacy API: v0.45.0+. Experiment gate: unreleased (Main only). | Requires `drift-detection`, `api-secret`, and drift enable flags | [ADR 0002](/contributing/adr/0002-api-enhancement-drift-detection.md) | [Development #7033](https://github.com/runatlantis/atlantis/issues/7033) |
 | [Web UI](#web-ui) | `web-ui` | Experimental | Unreleased (Main only). | Requires `web-ui` | [ADR 0005](/contributing/adr/0005-use-durable-storage-with-one-data-model.md) data model | [Web UI #6158](https://github.com/runatlantis/atlantis/issues/6158) |
+| [Job timing traces](#job-timing-traces-experimental) | `web-traces` | Prototype | Unreleased (Main only). | Requires `web-traces` and `web-ui` | [ADR 0005](/contributing/adr/0005-use-durable-storage-with-one-data-model.md) data model | [Web UI #6158](https://github.com/runatlantis/atlantis/issues/6158) |
 
-The supported names are `api`, `drift-detection`, and `web-ui`. Each permits its own route group and does not grant the other permission. No current release tag contains this setting.
+The supported names are `api`, `drift-detection`, `web-ui`, and `web-traces`. Each permits its own route group and does not grant the others' permissions; `web-traces` adds to the web UI and needs `web-ui` too. No current release tag contains this setting.
 
 Both experiments share ADR 0002, but have separate tracking issues and graduation criteria. Graduating either one does not make the other stable.
 
@@ -196,6 +197,43 @@ Drift results are kept in memory on the replica that ran the detection and are l
 
 Without drift detection enabled, the page explains how to turn it on and the overview has no drift summary.
 
+### Job timing traces (experimental)
+
+With the `web-traces` experiment, Atlantis records how long each part of a job takes and shows it on a **Timing** tab on the job page, as a waterfall in the style of Jaeger or an APM tool. It needs the `web-ui` experiment:
+
+```sh
+atlantis server --experiments=web-ui,web-traces
+```
+
+Atlantis records a span for the job, for cloning the repository, and for each workflow step, such as `init`, `plan`, `show`, `policy_check`, `apply`, and `run` steps, and one for each Terraform or OpenTofu command it starts. Pre- and post-workflow hooks are traced as their own jobs. Atlantis then asks each command to report its own spans: it starts an OTLP/HTTP receiver on `127.0.0.1` on a random port, and gives every command, run step, and hook these environment variables:
+
+| Variable | Value |
+| --- | --- |
+| `OTEL_TRACES_EXPORTER` | `otlp` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://127.0.0.1:<port>` |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf` |
+| `TRACEPARENT` | The job's trace ID, with the step or command span as the parent |
+
+OpenTofu 1.10 and later export traces when `OTEL_TRACES_EXPORTER=otlp` is set, and so does Terraform, so the waterfall shows `init` broken into backend setup, module installs, and each provider install, and `plan` and `apply` broken into each resource. Older versions ignore the variables, and the waterfall shows only the Atlantis spans.
+
+The receiver only accepts spans whose trace ID Atlantis issued for a job that is still running, or ended less than a minute ago. It accepts protobuf and JSON, limits a request to 4 MiB, and keeps at most 20,000 spans per job; it counts the rest and says so on the page. Spans that arrive after the job, or for traces Atlantis didn't start, are rejected. If the server or a workflow `env` step already sets any `OTEL_` variable, Atlantis leaves that command's environment alone, so its spans go to your collector, and the Timing tab says so.
+
+The waterfall has a time axis and one row per span, nested under its parent, with bars placed by start time and sized by duration. Bars are colored by kind: Atlantis steps, Terraform work, providers, and resources. Failed spans are red, and the critical path, the chain of spans the job waited on, is outlined. Select a span to see its timing, status, and attributes. You can collapse a span's children, find spans by name, show the slowest spans first, or show only the critical path; a list of the ten slowest spans sits under the waterfall. While the job runs the waterfall updates as spans arrive. When a job has more than 300 spans, short spans that each took under half a percent of the job are grouped into "N more spans" rows. The full trace is available from the [JSON API](#web-ui-json-api) at `/ui/api/v1/jobs/{id}/trace`. Viewing traces needs the viewer role, like the job's output.
+
+#### What OpenTofu puts in a trace
+
+A plan of a small configuration with the `null`, `random`, and `time` providers and a local module, traced end to end with OpenTofu 1.13, produced spans named `Init`, `Initialize Backend`, `Get Providers`, `Install Providers - darwin_arm64`, `Install Provider "registry.opentofu.org/hashicorp/null"`, `Install Module "pets"`, `Validate provider configuration`, `Configure provider`, `Plan phase`, `Plan resource instance changes`, `Apply phase`, `Apply resource instance changes`, and an `HTTP GET` for each registry and download request. Attributes name resources (`opentofu.resource_instance.address`), providers, modules, and the plan mode. Variable values, including sensitive ones, did not appear.
+
+Terraform 1.17 reports fewer spans: `initialize backend`, `install modules`, `install providers`, and `HashiCorp Checkpoint` for `init`, and no spans per resource. It names its root span after the whole command line, which can hold `-var` values, so Atlantis keeps only the binary and subcommand, such as `terraform plan`, of any span reported directly under an Atlantis span.
+
+OpenTofu 1.13 marks `Install Module` spans of local modules as failed with the message `no diagnostics` even when `init` succeeds, so they show in red.
+
+Some attributes can be sensitive, though: `url.full` and `http.response.header.location` hold provider download URLs, which can be signed links with tokens in them, and the resource attributes of every span include the command line (`process.command_args`), which can contain `-var` values, the host name, and the user. So by default Atlantis keeps the values of an allowlist of attributes only: resource, provider and module addresses, plan mode, target platform, HTTP method and status, server address, and error type and message. Other attributes keep their key with the value hidden, and resource attributes other than the service name are dropped. [`--web-traces-all-attributes`](server-configuration.md#web-traces-all-attributes) keeps every span attribute value. Atlantis never logs attribute values.
+
+::: warning
+Traces are kept in memory on the replica that ran the job, next to its output, and are removed with it when the pull request closes or the server restarts. Other replicas can't show them. Durable storage ([ADR 0005](/contributing/adr/0005-use-durable-storage-with-one-data-model.md)) will share them.
+:::
+
 ### Web UI JSON API
 
 The data the web UI shows is also available as read-only JSON under `/ui/api/v1`, for scripts and dashboards. `GET /ui/api/v1/openapi.json` returns its OpenAPI 3.1 description. The API is part of the `web-ui` experiment and may change before the UI graduates.
@@ -209,6 +247,7 @@ The data the web UI shows is also available as read-only JSON under `/ui/api/v1`
 | `/repos/{repo}/pulls/{num}/policies?dir=&workspace=&project=` | A project's policy check, as on the **Policies** page |
 | `/locks` and `/apply-lock` | Project locks and the global apply lock |
 | `/jobs` and `/jobs/{id}` | Jobs this replica has a record of. Logs aren't part of the API. |
+| `/jobs/{id}/trace` | A job's [timing trace](#job-timing-traces-experimental): every span with its parent, times, status, and attributes |
 | `/maintenance` | Active maintenance windows |
 | `/drift` | The latest drift detection results |
 

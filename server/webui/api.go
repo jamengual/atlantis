@@ -39,6 +39,7 @@ func (h *Handler) apiRoutes() []struct {
 		{"/apply-lock", h.apiApplyLock},
 		{"/jobs", h.apiJobs},
 		{"/jobs/{id}", h.apiJob},
+		{"/jobs/{id}/trace", h.apiJobTrace},
 		{"/maintenance", h.apiMaintenance},
 		{"/drift", h.apiDrift},
 	}
@@ -408,4 +409,16 @@ func (h *Handler) apiDrift(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// apiJobTrace returns a job's timing trace. Spans are in the order they
+// arrived; parent_id links them into a tree.
+func (h *Handler) apiJobTrace(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	if _, ok := h.Store.GetJob(r.Context(), id); !ok {
+		writeAPIError(w, http.StatusNotFound, "not_found",
+			"This replica has no record of that job. Job output and traces live in memory on the replica that ran the job and are cleared on restart.")
+		return
+	}
+	writeJSON(w, http.StatusOK, apiItem[apiJobTraceBody]{Item: toAPIJobTrace(id, h.Store.JobTrace(r.Context(), id)), Capabilities: h.caps()})
 }

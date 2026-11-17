@@ -48,6 +48,8 @@ func apiStore(t *testing.T) *fakeStore {
 		{ID: "mw-2", Repo: webui.Repository{FullName: "acme/data"}, Plans: true, Reason: "Freeze", By: "Ada", Since: now.Add(-2 * time.Hour)},
 	}
 	s.drift = driftStore().drift
+	s.traces = map[string]webui.JobTrace{"infra-plan": sampleTrace()}
+	s.caps = webui.Capabilities{Traces: true}
 	return s
 }
 
@@ -63,6 +65,7 @@ var apiPaths = map[string]string{
 	"/apply-lock":                        "/ui/api/v1/apply-lock",
 	"/jobs":                              "/ui/api/v1/jobs",
 	"/jobs/{id}":                         "/ui/api/v1/jobs/infra-plan",
+	"/jobs/{id}/trace":                   "/ui/api/v1/jobs/infra-plan/trace",
 	"/maintenance":                       "/ui/api/v1/maintenance",
 	"/drift":                             "/ui/api/v1/drift",
 }

@@ -2045,6 +2045,16 @@ ATLANTIS_WEB_SSO_PROVIDERS=oidc,github
 
 Sign-in providers for the web UI at `/ui`, separated by commas: `oidc`, `google`, and `github`. Requires the `web-ui` experiment, [`--web-session-secrets`](#web-session-secrets), and at least one role rule. Can't be combined with [`--web-proxy-auth`](#web-proxy-auth). See [web UI sign-in](experiments.md#web-ui-sign-in).
 
+### `--web-traces-all-attributes` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-traces-all-attributes
+# or
+ATLANTIS_WEB_TRACES_ALL_ATTRIBUTES=true
+```
+
+Keep every span attribute value in [job timing traces](experiments.md#job-timing-traces-experimental). By default Atlantis keeps only the values of attributes that name resources, providers and modules, or describe timing and errors, and keeps just the key of the rest, because OpenTofu records download URLs and response headers that can carry signed tokens. Requires the `web-traces` experiment. Defaults to `false`.
+
 ### `--web-username`
 
 ```bash

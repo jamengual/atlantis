@@ -1182,22 +1182,50 @@ templ jobsPage(m meta, d jobsData) {
 	}
 }
 
+templ jobHeader(m meta, j Job, returnTo string) {
+	<div class="prhead">
+		<h1 class="mono">{ jobLabel(j) }</h1>
+		<div class="prmeta">
+			@jobStatus(j)
+			<span>{ j.Step }</span>
+			<a href={ templ.SafeURL(pullHref(m.Base, j.Repo, j.PullNum)) }>{ j.Repo.FullName } #{ itoa(j.PullNum) }</a>
+			<span>workspace { j.Workspace }</span>
+			if m.CanStop(j) {
+				<span class="grow-right">
+					@stopControl(m, j, returnTo)
+				</span>
+			}
+		</div>
+	</div>
+}
+
+// jobTabs switches between a job's output and its timing. They show only
+// when the server records traces.
+templ jobTabs(m meta, j Job, active string) {
+	if m.Caps.Traces {
+		<nav class="filters tabs" aria-label="Job views">
+			<a
+				class="chip"
+				href={ templ.SafeURL(jobHref(m.Base, j.ID)) }
+				if active == "output" {
+					aria-current="page"
+				}
+			>Output</a>
+			<a
+				class="chip"
+				href={ templ.SafeURL(jobHref(m.Base, j.ID) + "/timing") }
+				if active == "timing" {
+					aria-current="page"
+				}
+			>Timing</a>
+		</nav>
+	}
+}
+
 templ jobPage(m meta, j Job) {
 	@layout(m) {
-		<div class="prhead">
-			<h1 class="mono">{ jobLabel(j) }</h1>
-			<div class="prmeta">
-				@jobStatus(j)
-				<span>{ j.Step }</span>
-				<a href={ templ.SafeURL(pullHref(m.Base, j.Repo, j.PullNum)) }>{ j.Repo.FullName } #{ itoa(j.PullNum) }</a>
-				<span>workspace { j.Workspace }</span>
-				if m.CanStop(j) {
-					<span class="grow-right">
-						@stopControl(m, j, jobHref(m.Base, j.ID))
-					</span>
-				}
-			</div>
-		</div>
+		@jobHeader(m, j, jobHref(m.Base, j.ID))
+		@jobTabs(m, j, "output")
 		if j.Stop != nil {
 			<section class={ "panel", "stopnote", templ.KV("killed", j.Stop.Killed) } id="stop-note">
 				<p>

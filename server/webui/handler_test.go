@@ -38,13 +38,28 @@ type fakeStore struct {
 	drift    webui.DriftReport
 	driftErr error
 	err      error
+	// traces are the job traces; nil means tracing is off.
+	traces map[string]webui.JobTrace
+	caps   webui.Capabilities
+}
+
+func (f *fakeStore) JobTrace(_ context.Context, id string) webui.JobTrace {
+	if f.traces == nil {
+		return webui.JobTrace{Status: webui.TraceOff}
+	}
+	t, ok := f.traces[id]
+	if !ok {
+		return webui.JobTrace{Status: webui.TraceMissing}
+	}
+	t.Status = webui.TraceReady
+	return t
 }
 
 func (f *fakeStore) ListDrift(context.Context) (webui.DriftReport, error) {
 	return f.drift, f.driftErr
 }
 
-func (f *fakeStore) Capabilities() webui.Capabilities { return webui.Capabilities{} }
+func (f *fakeStore) Capabilities() webui.Capabilities { return f.caps }
 func (f *fakeStore) Instance(context.Context) webui.Instance {
 	return webui.Instance{Version: "9.9.9", LockingBackend: "redis", DatabaseOK: true, InProgressOps: 3}
 }

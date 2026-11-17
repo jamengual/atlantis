@@ -387,6 +387,44 @@
         ]
       }
     },
+    "/jobs/{id}/trace": {
+      "get": {
+        "operationId": "getJobTrace",
+        "summary": "A job's timing trace",
+        "description": "The spans of a job: Atlantis's own job, step and command spans, and the spans Terraform or OpenTofu reported for its commands. Needs the web-traces experiment; status is off without it. Attribute values outside an allowlist are hidden unless the server runs with --web-traces-all-attributes.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobTraceItem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/maintenance": {
       "get": {
         "operationId": "listMaintenance",
@@ -571,7 +609,9 @@
           "shared_plans",
           "shared_policy_output",
           "shared_maintenance",
-          "shared_drift"
+          "shared_drift",
+          "traces",
+          "shared_traces"
         ],
         "properties": {
           "run_history": {
@@ -601,6 +641,14 @@
           "shared_drift": {
             "type": "boolean",
             "description": "Drift results are stored centrally. When false, results live on the replica that received them."
+          },
+          "traces": {
+            "type": "boolean",
+            "description": "Jobs record timing traces. False when the web-traces experiment is off."
+          },
+          "shared_traces": {
+            "type": "boolean",
+            "description": "Timing traces are stored centrally. When false, a trace lives in memory on the replica that ran the job and is removed with its output."
           }
         },
         "description": "Which data the store can answer across replicas and restarts. Data a flag marks as replica-local may differ between replicas."
@@ -2074,6 +2122,183 @@
         "properties": {
           "item": {
             "$ref": "#/components/schemas/Job"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/Capabilities"
+          }
+        }
+      },
+      "TraceAttribute": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "value",
+          "hidden"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Null when the value was hidden."
+          },
+          "hidden": {
+            "type": "boolean",
+            "description": "The value was not kept because it may be sensitive."
+          }
+        }
+      },
+      "TraceSpan": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "parent_id",
+          "name",
+          "category",
+          "source",
+          "start",
+          "end",
+          "duration_ms",
+          "error",
+          "message",
+          "attributes"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Hex span ID."
+          },
+          "parent_id": {
+            "type": "string",
+            "description": "Hex ID of the parent span; empty for the job's span."
+          },
+          "name": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "job",
+              "step",
+              "command",
+              "tool",
+              "provider",
+              "resource"
+            ],
+            "description": "job and step are Atlantis's own; command is a Terraform or OpenTofu process; tool, provider and resource are spans the process reported."
+          },
+          "source": {
+            "type": "string",
+            "description": "atlantis, or the reporting service's name, such as OpenTofu CLI."
+          },
+          "start": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339 with nanoseconds, in UTC."
+          },
+          "end": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Null while the span runs."
+          },
+          "duration_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Null while the span runs."
+          },
+          "error": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string",
+            "description": "The error message of a failed span."
+          },
+          "attributes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TraceAttribute"
+            }
+          }
+        }
+      },
+      "JobTrace": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "job_id",
+          "status",
+          "trace_id",
+          "finished",
+          "dropped_spans",
+          "all_attributes",
+          "notes",
+          "spans"
+        ],
+        "properties": {
+          "job_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "off",
+              "missing",
+              "ready"
+            ],
+            "description": "off: the server doesn't record traces. missing: this replica has no trace for the job. ready: the trace was read."
+          },
+          "trace_id": {
+            "type": "string",
+            "description": "Hex trace ID; empty unless ready."
+          },
+          "finished": {
+            "type": "boolean",
+            "description": "The job's own span ended."
+          },
+          "dropped_spans": {
+            "type": "integer",
+            "description": "Spans over the per-job limit, which were not kept."
+          },
+          "all_attributes": {
+            "type": "boolean",
+            "description": "Every attribute value was kept."
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Gaps in the trace, such as a workflow that sends its spans elsewhere."
+          },
+          "spans": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TraceSpan"
+            }
+          }
+        }
+      },
+      "JobTraceItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "item",
+          "capabilities"
+        ],
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/JobTrace"
           },
           "capabilities": {
             "$ref": "#/components/schemas/Capabilities"

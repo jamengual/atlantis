@@ -46,6 +46,8 @@ type apiCapabilities struct {
 	SharedPolicyOutput bool `json:"shared_policy_output"`
 	SharedMaintenance  bool `json:"shared_maintenance"`
 	SharedDrift        bool `json:"shared_drift"`
+	Traces             bool `json:"traces"`
+	SharedTraces       bool `json:"shared_traces"`
 }
 
 func toAPICapabilities(c Capabilities) apiCapabilities {
@@ -446,4 +448,65 @@ func nonNil[T any](s []T) []T {
 		return []T{}
 	}
 	return s
+}
+
+type apiTraceAttribute struct {
+	Key string `json:"key"`
+	// Value is null when it was hidden.
+	Value  *string `json:"value"`
+	Hidden bool    `json:"hidden"`
+}
+
+type apiTraceSpan struct {
+	ID       string `json:"id"`
+	ParentID string `json:"parent_id"`
+	Name     string `json:"name"`
+	Category string `json:"category"`
+	Source   string `json:"source"`
+	Start    string `json:"start"`
+	// End is null while the span runs.
+	End        *string             `json:"end"`
+	DurationMS *float64            `json:"duration_ms"`
+	Error      bool                `json:"error"`
+	Message    string              `json:"message"`
+	Attributes []apiTraceAttribute `json:"attributes"`
+}
+
+type apiJobTraceBody struct {
+	JobID         string         `json:"job_id"`
+	Status        string         `json:"status"`
+	TraceID       string         `json:"trace_id"`
+	Finished      bool           `json:"finished"`
+	DroppedSpans  int            `json:"dropped_spans"`
+	AllAttributes bool           `json:"all_attributes"`
+	Notes         []string       `json:"notes"`
+	Spans         []apiTraceSpan `json:"spans"`
+}
+
+func toAPIJobTrace(jobID string, t JobTrace) apiJobTraceBody {
+	out := apiJobTraceBody{
+		JobID: jobID, Status: string(t.Status), TraceID: t.TraceID, Finished: t.Finished,
+		DroppedSpans: t.Dropped, AllAttributes: t.AllAttributes, Notes: nonNil(t.Notes), Spans: []apiTraceSpan{},
+	}
+	for _, s := range t.Spans {
+		sp := apiTraceSpan{
+			ID: s.ID, ParentID: s.ParentID, Name: s.Name, Category: string(s.Category), Source: s.Source,
+			Start: s.Start.UTC().Format(time.RFC3339Nano), Error: s.Error, Message: s.Message, Attributes: []apiTraceAttribute{},
+		}
+		if !s.Running() {
+			end := s.End.UTC().Format(time.RFC3339Nano)
+			ms := float64(s.End.Sub(s.Start)) / float64(time.Millisecond)
+			sp.End, sp.DurationMS = &end, &ms
+		}
+		for _, a := range s.Attributes {
+			attr := apiTraceAttribute{Key: a.Key, Hidden: a.Hidden}
+			if !a.Hidden {
+				v := a.Value
+				attr.Value = &v
+			}
+			sp.Attributes = append(sp.Attributes, attr)
+		}
+		out.Spans = append(out.Spans, sp)
+	}
+	return out
 }

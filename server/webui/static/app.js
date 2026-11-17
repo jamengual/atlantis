@@ -315,3 +315,199 @@ function setupPlanView() {
   }
 }
 setupPlanView();
+
+// ---------- timing waterfall ----------
+// The server renders every row in tree order. This element collapses
+// subtrees, sorts by duration, filters by name, shows a span's details, and
+// reloads the waterfall while the job runs. Without JavaScript the full tree
+// and every row stay visible.
+class TraceView extends HTMLElement {
+  connectedCallback() {
+    this.body = this.querySelector("[data-wf-body]");
+    this.state = { collapsed: new Set(), selected: null, filter: "", sort: false, critical: false };
+    this.addEventListener("click", (e) => this.onClick(e));
+    this.addEventListener("input", (e) => {
+      if (!e.target.matches("[data-wf-filter]")) return;
+      this.state.filter = e.target.value;
+      this.apply();
+    });
+    this.addEventListener("keydown", (e) => this.onKey(e));
+    this.setup();
+    if (this.dataset.events) this.listen();
+  }
+
+  disconnectedCallback() {
+    this.source?.close();
+    clearTimeout(this.timer);
+  }
+
+  setup() {
+    const tools = this.querySelector("[data-wf-tools]");
+    if (tools) tools.hidden = false;
+    const filter = this.querySelector("[data-wf-filter]");
+    if (filter && filter.value !== this.state.filter) filter.value = this.state.filter;
+    this.querySelector("[data-wf-sort]")?.setAttribute("aria-pressed", String(this.state.sort));
+    this.querySelector("[data-wf-critical]")?.setAttribute("aria-pressed", String(this.state.critical));
+    this.apply();
+    if (this.state.selected) this.select(this.state.selected, false);
+  }
+
+  rows() {
+    return [...this.querySelectorAll(".wf-row[data-id]")];
+  }
+
+  rowFor(id) {
+    return this.querySelector('.wf-row[data-id="' + CSS.escape(id) + '"]');
+  }
+
+  onClick(e) {
+    const t = e.target;
+    const toggle = t.closest("[data-wf-toggle]");
+    if (toggle) {
+      const id = toggle.closest(".wf-row").dataset.id;
+      if (this.state.collapsed.has(id)) this.state.collapsed.delete(id);
+      else this.state.collapsed.add(id);
+      this.apply();
+      return;
+    }
+    const label = t.closest("[data-wf-select]");
+    if (label) { this.select(label.closest(".wf-row").dataset.id, false); return; }
+    const sort = t.closest("[data-wf-sort]");
+    if (sort) { this.state.sort = !this.state.sort; sort.setAttribute("aria-pressed", String(this.state.sort)); this.apply(); return; }
+    const crit = t.closest("[data-wf-critical]");
+    if (crit) { this.state.critical = !this.state.critical; crit.setAttribute("aria-pressed", String(this.state.critical)); this.apply(); return; }
+    const go = t.closest("[data-wf-goto]");
+    if (go) this.select(go.dataset.wfGoto, true);
+  }
+
+  // apply orders and hides rows for the current state. Collapsing works on
+  // the tree order, where a row's descendants follow it with greater depth.
+  apply() {
+    const list = this.querySelector("[data-wf-rows]");
+    if (!list) return;
+    const s = this.state;
+    const q = s.filter.trim().toLowerCase();
+    const flat = s.sort || q !== "" || s.critical;
+    list.classList.toggle("flat", flat);
+    const tree = this.rows().sort((a, b) => Number(a.dataset.i) - Number(b.dataset.i));
+    const order = s.sort ? [...tree].sort((a, b) => Number(b.dataset.dur) - Number(a.dataset.dur)) : tree;
+    // Moving rows drops keyboard focus, so only move them when the order
+    // changes.
+    const current = this.rows();
+    if (order.some((r, i) => current[i] !== r)) {
+      const active = document.activeElement;
+      order.forEach((r) => list.append(r));
+      if (active && this.contains(active)) active.focus({ preventScroll: true });
+    }
+    let hideBelow = Infinity;
+    let shown = 0;
+    for (const r of tree) {
+      const depth = Number(r.dataset.depth);
+      let hidden;
+      if (flat) {
+        hidden = (q !== "" && !r.dataset.name.includes(q)) || (s.critical && !r.dataset.crit);
+      } else {
+        if (depth <= hideBelow) hideBelow = Infinity;
+        hidden = depth > hideBelow;
+        if (!hidden && s.collapsed.has(r.dataset.id)) hideBelow = depth;
+      }
+      r.hidden = hidden;
+      if (!hidden) shown++;
+      const tw = r.querySelector("[data-wf-toggle]");
+      if (tw) {
+        const open = !s.collapsed.has(r.dataset.id);
+        tw.setAttribute("aria-expanded", String(open));
+        tw.setAttribute("aria-label", (open ? "Collapse " : "Expand ") + r.querySelector(".wf-label").textContent);
+      }
+    }
+    let none = this.querySelector("[data-wf-none]");
+    if (!shown) {
+      if (!none) {
+        none = document.createElement("p");
+        none.className = "empty";
+        none.dataset.wfNone = "";
+        none.textContent = "No spans match. Clear the filter to see them all.";
+        list.after(none);
+      }
+    } else none?.remove();
+  }
+
+  select(id, reveal) {
+    const row = this.rowFor(id);
+    if (!row) return;
+    this.state.selected = id;
+    if (reveal && row.hidden) {
+      // Open the collapsed ancestors and drop filters that hide the row.
+      this.state.collapsed.clear();
+      this.state.filter = "";
+      this.state.critical = false;
+      this.setup();
+    }
+    this.querySelectorAll(".wf-row.sel").forEach((r) => r.classList.remove("sel"));
+    row.classList.add("sel");
+    this.querySelectorAll("[data-wf-detail]").forEach((d) => { d.hidden = d.dataset.wfDetail !== id; });
+    const empty = this.querySelector("[data-wf-empty]");
+    if (empty) empty.hidden = true;
+    if (reveal) {
+      row.scrollIntoView({ block: "center" });
+      row.querySelector(".wf-label")?.focus();
+    }
+  }
+
+  onKey(e) {
+    const label = e.target.closest?.(".wf-label");
+    if (!label) return;
+    const row = label.closest(".wf-row");
+    const visible = this.rows().filter((r) => !r.hidden);
+    const i = visible.indexOf(row);
+    const focus = (r) => { if (r) { r.querySelector(".wf-label").focus(); e.preventDefault(); } };
+    const id = row.dataset.id;
+    switch (e.key) {
+      case "ArrowDown": focus(visible[i + 1]); break;
+      case "ArrowUp": focus(visible[i - 1]); break;
+      case "Home": focus(visible[0]); break;
+      case "End": focus(visible[visible.length - 1]); break;
+      case "ArrowRight":
+        if (row.querySelector("[data-wf-toggle]") && this.state.collapsed.has(id)) { this.state.collapsed.delete(id); this.apply(); e.preventDefault(); }
+        break;
+      case "ArrowLeft":
+        if (row.querySelector("[data-wf-toggle]") && !this.state.collapsed.has(id)) { this.state.collapsed.add(id); this.apply(); e.preventDefault(); }
+        break;
+    }
+  }
+
+  listen() {
+    this.source = new EventSource(this.dataset.events);
+    this.source.addEventListener("trace", () => this.schedule());
+    this.source.addEventListener("done", () => { this.source.close(); this.schedule(); });
+  }
+
+  // schedule reloads the waterfall at most once a second.
+  schedule() {
+    if (this.timer) { this.again = true; return; }
+    this.refresh();
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      if (this.again) { this.again = false; this.schedule(); }
+    }, 1000);
+  }
+
+  async refresh() {
+    let html;
+    try {
+      const resp = await fetch(this.dataset.src, { credentials: "same-origin", headers: { Accept: "text/html" } });
+      if (!resp.ok) return;
+      html = await resp.text();
+    } catch { return; }
+    const scroller = this.querySelector(".wf-scroll");
+    const scroll = scroller ? [scroller.scrollLeft, scroller.scrollTop] : null;
+    const focused = document.activeElement?.closest?.(".wf-row")?.dataset.id;
+    this.body.innerHTML = html;
+    this.setup();
+    const next = this.querySelector(".wf-scroll");
+    if (next && scroll) [next.scrollLeft, next.scrollTop] = scroll;
+    if (focused) this.rowFor(focused)?.querySelector(".wf-label")?.focus({ preventScroll: true });
+  }
+}
+
+if (!customElements.get("trace-view")) customElements.define("trace-view", TraceView);
