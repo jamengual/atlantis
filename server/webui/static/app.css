@@ -378,6 +378,10 @@ button.wf-twisty:hover { background: var(--sunk); color: var(--ink); }
 .wf-op { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 4px; }
 .wf-row.err .wf-label { color: var(--del); }
 .wf-row.fold .wf-label { font-style: italic; color: var(--muted); }
+.wf-row.group .wf-label { color: var(--muted); }
+.wf-row.group .wf-label:hover { color: var(--accent); }
+.wf-caret::before { content: "\25BE"; }
+.wf-row.group:has([aria-expanded="false"]) .wf-caret::before { content: "\25B8"; }
 .wf-bar { align-self: stretch; display: flex; align-items: center; background-image: linear-gradient(to right, var(--rule) 1px, transparent 1px); background-size: 25% 100%; }
 .wf-bar svg { display: block; width: 100%; height: 14px; overflow: visible; }
 .wf-bar rect { fill: var(--cat-tool); opacity: .55; }
@@ -387,6 +391,7 @@ button.wf-twisty:hover { background: var(--sunk); color: var(--ink); }
 .wf-row.err rect { fill: var(--del); opacity: 1; }
 .wf-row.crit rect { opacity: 1; stroke: var(--ink); stroke-width: 1px; vector-effect: non-scaling-stroke; }
 .wf-row.fold rect { opacity: .35; }
+.wf-row.group rect { opacity: .3; }
 .wf-row.live rect { animation: pulse 1.4s ease-in-out infinite; }
 .wf-ticks { display: flex; justify-content: space-between; color: var(--muted); font-variant-numeric: tabular-nums; background: none; }
 .wf-dur { text-align: right; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
@@ -397,6 +402,7 @@ button.wf-twisty:hover { background: var(--sunk); color: var(--ink); }
 .wf-detail .attrs li { grid-template-columns: minmax(0, 1fr); }
 .wf-detail .wf-hidden { margin: 0; font-size: 12.5px; overflow-wrap: anywhere; }
 .wf-top { border-top: 1px solid var(--rule); padding: 12px 14px 14px; }
+.wf-top-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .wf-top ol { margin: 8px 0 0; padding-left: 22px; display: flex; flex-direction: column; gap: 4px; }
 .wf-top li { font-size: 13px; }
 .wf-top li > * { margin-right: 8px; }

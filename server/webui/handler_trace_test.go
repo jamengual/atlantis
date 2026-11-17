@@ -9,6 +9,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -126,6 +128,105 @@ func TestTiming_EscapesSpanNamesAndAttributes(t *testing.T) {
 	}
 	_, _, raw := getJSON(t, http.DefaultClient, srv.URL+"/ui/api/v1/jobs/infra-plan/trace")
 	Assert(t, !strings.Contains(raw, "<script>"), "API returned raw markup: %s", raw)
+}
+
+// initTrace is a finished tofu init: OpenTofu marks the local module
+// install as an error with "no diagnostics", and the registry lookups are
+// HTTP requests.
+func initTrace(source string, cmdErr bool) webui.JobTrace {
+	at := func(ms int) time.Time { return now.Add(-time.Minute).Add(time.Duration(ms) * time.Millisecond) }
+	tr := webui.JobTrace{Finished: true, Spans: []webui.TraceSpan{
+		{ID: "j", Name: "atlantis plan", Category: webui.TraceJob, Source: "atlantis", Start: at(0), End: at(5000)},
+		{ID: "c", ParentID: "j", Name: "tofu init", Category: webui.TraceCommand, Source: "atlantis", Start: at(0), End: at(4000), Error: cmdErr},
+		{ID: "g", ParentID: "c", Name: "Get Modules", Category: webui.TraceTool, Source: source, Start: at(10), End: at(50)},
+		{ID: "m", ParentID: "g", Name: `Install Module "pets"`, Category: webui.TraceTool, Source: source, Start: at(20), End: at(30),
+			Error: true, Message: "no diagnostics"},
+		{ID: "lv", ParentID: "c", Name: "List Versions", Category: webui.TraceTool, Source: source, Start: at(100), End: at(3000)},
+	}}
+	for i := range 3 {
+		tr.Spans = append(tr.Spans, webui.TraceSpan{ID: "h" + strconv.Itoa(i), ParentID: "lv", Name: "HTTP GET", Category: webui.TraceTool, Source: source,
+			Start: at(100 + i*1000), End: at(500 + i*1000),
+			Attributes: []webui.TraceAttribute{{Key: "http.request.method", Value: "GET"}, {Key: "span.kind", Value: "client"}, {Key: "server.address", Value: "registry.opentofu.org"}}})
+	}
+	return tr
+}
+
+func TestTiming_NamesTheToolThatReportedSpans(t *testing.T) {
+	s := traceStore()
+	srv := newServer(t, s, &fakeActions{}, "")
+	for source, want := range map[string]string{"OpenTofu CLI": "OpenTofu", "Terraform CLI": "Terraform", "": "OpenTofu / Terraform"} {
+		s.traces["infra-plan"] = initTrace(source, false)
+		_, body := get(t, srv, "/ui/jobs/infra-plan/timing")
+		assertContains(t, body, `<i class="sw cat-tool"></i>`+want+`</span>`, "<dt>Kind</dt><dd>"+want+"</dd>")
+		if source != "" {
+			assertContains(t, body, "<dt>Reported by</dt><dd>"+want+"</dd>")
+		}
+	}
+	// Spans from both tools, as in a trace that mixes them, name both.
+	tr := initTrace("OpenTofu CLI", false)
+	tr.Spans[4].Source = "Terraform CLI"
+	s.traces["infra-plan"] = tr
+	_, body := get(t, srv, "/ui/jobs/infra-plan/timing")
+	assertContains(t, body, `<i class="sw cat-tool"></i>OpenTofu / Terraform</span>`, "<dt>Reported by</dt><dd>Atlantis</dd>")
+	// The API keeps its machine values.
+	_, _, raw := getJSON(t, http.DefaultClient, srv.URL+"/ui/api/v1/jobs/infra-plan/trace")
+	assertContains(t, raw, `"category":"tool","source":"OpenTofu CLI"`)
+}
+
+func TestTiming_NoDiagnosticsErrorsUnderASucceededCommandAreNotFailures(t *testing.T) {
+	s := traceStore()
+	s.traces["infra-plan"] = initTrace("OpenTofu CLI", false)
+	srv := newServer(t, s, &fakeActions{}, "")
+	_, body := get(t, srv, "/ui/jobs/infra-plan/timing")
+	Assert(t, !regexp.MustCompile(`class="wf-row[^"]* err[ "]`).MatchString(body), "a span is marked failed")
+	Assert(t, !strings.Contains(body, ", failed"), "a row label says failed")
+	assertContains(t, body, `<b class="num">0</b>`,
+		"Reported as an error by OpenTofu with no diagnostics; the command succeeded.", "<dt>Message</dt><dd class=\"mono\">no diagnostics</dd>")
+
+	// When the command failed, the span counts.
+	s.traces["infra-plan"] = initTrace("OpenTofu CLI", true)
+	_, body = get(t, srv, "/ui/jobs/infra-plan/timing")
+	assertContains(t, body, `<b class="num bad-text">2</b>`, `class="wf-row d3 cat-tool err crit"`, `Install Module &#34;pets&#34;, OpenTofu, 10ms, failed`)
+	Assert(t, !strings.Contains(body, "Reported as an error by"), "benign note on a real failure")
+}
+
+func TestTiming_GroupsHTTPRequests(t *testing.T) {
+	s := traceStore()
+	s.traces["infra-plan"] = initTrace("OpenTofu CLI", false)
+	srv := newServer(t, s, &fakeActions{}, "")
+	_, body := get(t, srv, "/ui/jobs/infra-plan/timing")
+	assertContains(t, body,
+		`data-id="http-lv"`, `data-group="1"`,
+		`<button type="button" class="wf-label" data-wf-toggle aria-expanded="true" title="3 HTTP requests · 1.20s total">3 HTTP requests · 1.20s total</button>`,
+		`data-group-of="http-lv"`,
+		// The slowest list leaves requests out unless asked.
+		`data-wf-http aria-pressed="false" aria-controls="wf-top-all wf-top-main" hidden>Include HTTP requests</button>`,
+		`<ol id="wf-top-main">`, `<ol id="wf-top-all" hidden>`)
+	Equals(t, 3, strings.Count(body, `data-group-of="http-lv"`))
+	main := body[strings.Index(body, `<ol id="wf-top-main">`):strings.Index(body, `<ol id="wf-top-all"`)]
+	Assert(t, !strings.Contains(main, "HTTP GET"), "requests in the default slowest list")
+	all := body[strings.Index(body, `<ol id="wf-top-all"`):]
+	Equals(t, 3, strings.Count(all[:strings.Index(all, "</ol>")], "HTTP GET"))
+	// The group row has no details panel of its own.
+	Assert(t, !strings.Contains(body, `data-wf-detail="http-lv"`), "group row has details")
+
+	// Without requests there is no toggle.
+	s.traces["infra-plan"] = sampleTrace()
+	_, body = get(t, srv, "/ui/jobs/infra-plan/timing")
+	Assert(t, !strings.Contains(body, "data-wf-http"), "toggle without requests")
+}
+
+func TestTiming_EscapesToolNamesAndGroups(t *testing.T) {
+	s := traceStore()
+	tr := initTrace(`<script>alert("src")</script>`, false)
+	tr.Spans[5].Name = `HTTP <img src=x onerror=alert(1)>`
+	s.traces["infra-plan"] = tr
+	srv := newServer(t, s, &fakeActions{}, "")
+	_, body := get(t, srv, "/ui/jobs/infra-plan/timing")
+	for _, raw := range []string{`<script>alert`, `<img src=x`} {
+		Assert(t, !strings.Contains(body, raw), "rendered %q unescaped", raw)
+	}
+	assertContains(t, body, "&lt;script&gt;alert(&#34;src&#34;)&lt;/script&gt;", "HTTP &lt;img src=x onerror=alert(1)&gt;")
 }
 
 func TestTiming_ViewersCanSeeIt(t *testing.T) {

@@ -5,6 +5,7 @@ package webui
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -148,4 +149,189 @@ func TestWaterfallRow_TinyBarsStayVisibleAndInside(t *testing.T) {
 	Equals(t, "1.00", r.barWidth())
 	r = waterfallRow{Offset: 600, Width: 500}
 	Equals(t, "400.00", r.barWidth())
+}
+
+func toolSpan(id, parent, source string, startMS, endMS int) TraceSpan {
+	s := span(id, parent, startMS, endMS)
+	s.Category, s.Source = TraceTool, source
+	return s
+}
+
+func TestToolName_FollowsWhatReportedTheSpans(t *testing.T) {
+	job := span("job", "", 0, 10)
+	job.Source = atlantisSource
+	for name, c := range map[string]struct {
+		sources []string
+		want    string
+	}{
+		"opentofu":  {[]string{"OpenTofu CLI", "OpenTofu CLI"}, "OpenTofu"},
+		"terraform": {[]string{"Terraform CLI"}, "Terraform"},
+		"both":      {[]string{"OpenTofu CLI", "Terraform CLI"}, "OpenTofu / Terraform"},
+		"unknown":   {[]string{"my-wrapper"}, "OpenTofu / Terraform"},
+		"none":      {nil, "OpenTofu / Terraform"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			spans := []TraceSpan{job}
+			for i, src := range c.sources {
+				spans = append(spans, toolSpan(fmt.Sprintf("s%d", i), "job", src, 1, 2))
+			}
+			Equals(t, c.want, toolName(spans))
+			Equals(t, c.want, buildWaterfall(JobTrace{Spans: spans}, t0, defaultWaterfallLimits).Tool)
+		})
+	}
+	Equals(t, "OpenTofu", categoryLabel(toolSpan("a", "", "OpenTofu CLI", 0, 1)))
+	Equals(t, "Terraform", categoryLabel(toolSpan("a", "", "Terraform CLI", 0, 1)))
+	Equals(t, "OpenTofu / Terraform", categoryLabel(toolSpan("a", "", "", 0, 1)))
+	Equals(t, "Resource", categoryLabel(TraceSpan{Category: TraceResource, Source: "Terraform CLI"}))
+	Equals(t, "Atlantis", reportedBy(atlantisSource))
+	Equals(t, "OpenTofu", reportedBy("OpenTofu CLI"))
+	Equals(t, "Terraform", reportedBy("Terraform CLI"))
+	Equals(t, "my-wrapper", reportedBy("my-wrapper"))
+}
+
+// moduleTrace is tofu init installing a local module, which OpenTofu
+// marks as an error with the given message, under a command that ended
+// with cmdErr.
+func moduleTrace(msg string, cmdErr bool) JobTrace {
+	job := span("job", "", 0, 1000)
+	job.Category = TraceJob
+	cmd := span("cmd", "job", 0, 900)
+	cmd.Category, cmd.Source, cmd.Error = TraceCommand, atlantisSource, cmdErr
+	get := toolSpan("get", "cmd", "OpenTofu CLI", 10, 50)
+	mod := toolSpan("mod", "get", "OpenTofu CLI", 20, 30)
+	mod.Error, mod.Message = true, msg
+	return JobTrace{Spans: []TraceSpan{job, cmd, get, mod}}
+}
+
+func TestWaterfall_BenignToolErrorsAreNotFailures(t *testing.T) {
+	for name, c := range map[string]struct {
+		msg    string
+		cmdErr bool
+		failed bool
+	}{
+		"no diagnostics, command ok":     {"no diagnostics", false, false},
+		"no message, command ok":         {"", false, false},
+		"no diagnostics, command failed": {"no diagnostics", true, true},
+		"real message, command ok":       {"Module not found", false, true},
+		"near miss message":              {"no diagnostics!", false, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := buildWaterfall(moduleTrace(c.msg, c.cmdErr), t0, defaultWaterfallLimits)
+			mod := rowsByID(w)["mod"]
+			Equals(t, c.failed, mod.Failed)
+			Equals(t, !c.failed, mod.Benign)
+			// The raw status stays on the span.
+			Assert(t, mod.Span.Error, "raw error status lost")
+			want := 0
+			if c.failed {
+				want = 1
+			}
+			if c.cmdErr {
+				want++
+			}
+			Equals(t, want, w.Errors)
+			Equals(t, !c.failed, !strings.Contains(rowClasses(mod), "err"))
+		})
+	}
+
+	// A running command has not succeeded yet.
+	tr := moduleTrace("no diagnostics", false)
+	tr.Spans[1].End = time.Time{}
+	Assert(t, rowsByID(buildWaterfall(tr, t0.Add(time.Second), defaultWaterfallLimits))["mod"].Failed, "benign under a running command")
+
+	// Without a command span the direct parent decides.
+	tr = moduleTrace("no diagnostics", false)
+	tr.Spans[2].ParentID = "job"
+	tr.Spans = append(tr.Spans[:1], tr.Spans[2:]...)
+	Assert(t, !rowsByID(buildWaterfall(tr, t0, defaultWaterfallLimits))["mod"].Failed, "benign under a parent that succeeded")
+	tr.Spans[1].Error = true
+	Assert(t, rowsByID(buildWaterfall(tr, t0, defaultWaterfallLimits))["mod"].Failed, "benign under a parent that failed")
+
+	// Atlantis's own errors always count.
+	tr = moduleTrace("", false)
+	tr.Spans[3].Source = atlantisSource
+	Assert(t, rowsByID(buildWaterfall(tr, t0, defaultWaterfallLimits))["mod"].Failed, "atlantis span error ignored")
+
+	// An orphan or a span in a parent cycle has no parent that succeeded.
+	tr = JobTrace{Spans: []TraceSpan{toolSpan("x", "y", "OpenTofu CLI", 0, 1), toolSpan("y", "x", "OpenTofu CLI", 0, 1)}}
+	tr.Spans[0].Error, tr.Spans[1].Error = true, true
+	Equals(t, 2, buildWaterfall(tr, t0, defaultWaterfallLimits).Errors)
+}
+
+func httpSpan(id, parent string, startMS, endMS int) TraceSpan {
+	s := toolSpan(id, parent, "OpenTofu CLI", startMS, endMS)
+	s.Name = "HTTP GET"
+	s.Attributes = []TraceAttribute{{Key: "http.request.method", Value: "GET"}, {Key: "span.kind", Value: "client"}}
+	return s
+}
+
+func TestIsHTTPSpan(t *testing.T) {
+	Assert(t, isHTTPSpan(httpSpan("a", "", 0, 1)), "HTTP GET")
+	named := toolSpan("a", "", "Terraform CLI", 0, 1)
+	named.Name = "HTTP HEAD"
+	Assert(t, isHTTPSpan(named), "name prefix")
+	byAttrs := httpSpan("a", "", 0, 1)
+	byAttrs.Name = "registry lookup"
+	Assert(t, isHTTPSpan(byAttrs), "client span with a method")
+	byAttrs.Attributes = byAttrs.Attributes[:1]
+	Assert(t, !isHTTPSpan(byAttrs), "method without client kind")
+	own := httpSpan("a", "", 0, 1)
+	own.Source = atlantisSource
+	Assert(t, !isHTTPSpan(own), "atlantis span")
+	Assert(t, !isHTTPSpan(toolSpan("HTTPServer", "", "OpenTofu CLI", 0, 1)), "plain span")
+}
+
+func TestWaterfall_GroupsHTTPRequests(t *testing.T) {
+	job := span("job", "", 0, 10000)
+	job.Category = TraceJob
+	spans := []TraceSpan{job, toolSpan("install", "job", "OpenTofu CLI", 0, 9000)}
+	for i := range 12 {
+		spans = append(spans, httpSpan(fmt.Sprintf("h%02d", i), "install", 10+i*100, 110+i*100))
+	}
+	// The last request is on the critical path; one failed. Requests that
+	// run one after another are all on it.
+	spans = append(spans, httpSpan("h-crit", "install", 5000, 9000))
+	bad := httpSpan("h-bad", "install", 2000, 2100)
+	bad.Error, bad.Message = true, "404 Not Found"
+	spans = append(spans, bad)
+	// A lone request elsewhere is not grouped.
+	spans = append(spans, toolSpan("other", "job", "OpenTofu CLI", 9000, 9500), httpSpan("lone", "other", 9000, 9100))
+
+	w := buildWaterfall(JobTrace{Spans: spans}, t0, defaultWaterfallLimits)
+	var order []string
+	for _, r := range w.Rows {
+		order = append(order, fmt.Sprintf("%s@%d", r.Span.ID, r.Depth))
+	}
+	Equals(t, "job@0 install@1 http-install@2", strings.Join(order[:3], " "))
+	g := w.Rows[2]
+	Assert(t, g.HTTPGroup && g.HasChildren && g.Critical && !g.Failed, "group row flags")
+	Equals(t, "13 HTTP requests", g.Span.Name)
+	Equals(t, 5200*time.Millisecond, g.HTTPTotal)
+	Equals(t, "13 HTTP requests · 5.20s total", groupLabel(g))
+	Equals(t, 8990*time.Millisecond, g.Duration)
+	for _, r := range w.Rows[3:16] {
+		Equals(t, 3, r.Depth)
+		Equals(t, "http-install", r.Group)
+	}
+	rows := rowsByID(w)
+	// Requests on the critical path stay marked inside the group, so the
+	// critical path view still lists them; failed requests stay outside.
+	Assert(t, rows["h-crit"].Critical, "critical request lost its mark")
+	Equals(t, "http-install", rows["h-crit"].Group)
+	for _, id := range []string{"h-bad", "lone"} {
+		Equals(t, "", rows[id].Group)
+	}
+	Equals(t, 2, rows["h-bad"].Depth)
+	Assert(t, rows["h-bad"].Failed, "failed request")
+	Equals(t, 15, w.HTTPRequests)
+	Equals(t, len(spans)+1, len(w.Rows))
+
+	// The slowest list leaves requests out unless asked.
+	for _, r := range w.Slowest {
+		Assert(t, !isHTTPSpan(r.Span), "%s in the slowest list", r.Span.ID)
+	}
+	Equals(t, []string{"install", "other"}, []string{w.Slowest[0].Span.ID, w.Slowest[1].Span.ID})
+	Equals(t, 2, len(w.Slowest))
+	Equals(t, 10, len(w.SlowestAll))
+	Equals(t, "h-crit", w.SlowestAll[1].Span.ID)
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -39,10 +40,19 @@ type waterfall struct {
 	Folded int
 	// Truncated counts rows left out because there were too many.
 	Truncated int
-	// Slowest are the ten longest spans, not counting the job's own.
+	// Slowest are the ten longest spans, not counting the job's own or
+	// HTTP requests.
 	Slowest []waterfallRow
-	// Errors counts failed spans.
+	// SlowestAll are the ten longest spans including HTTP requests.
+	SlowestAll []waterfallRow
+	// HTTPRequests counts HTTP request spans with no children.
+	HTTPRequests int
+	// Errors counts failed spans. Spans a tool reported as errors without
+	// saying why, under a command that succeeded, don't count.
 	Errors int
+	// Tool names the tool that reported spans: OpenTofu, Terraform, or
+	// "OpenTofu / Terraform" when both did or it is not known.
+	Tool string
 	// Running is true while a span is still open.
 	Running bool
 	// Spans is how many spans the trace has.
@@ -64,6 +74,18 @@ type waterfallRow struct {
 	More int
 	// Index is the row's position in tree order.
 	Index int
+	// Failed is true when the span failed. A span the tool reported as an
+	// error with no message, under a command that succeeded, has not.
+	Failed bool
+	// Benign is true when the tool reported the span as an error but it is
+	// not counted as failed.
+	Benign bool
+	// HTTPGroup is true for a row that stands for the HTTP requests below
+	// it; HTTPTotal is their summed duration.
+	HTTPGroup bool
+	HTTPTotal time.Duration
+	// Group is the ID of the HTTP group row a request row belongs to.
+	Group string
 }
 
 // Fold reports whether the row stands for several spans.
@@ -75,7 +97,15 @@ type spanNode struct {
 	end      time.Time
 	children []*spanNode
 	critical bool
+	// benign is true when the span's reported error is not counted.
+	benign bool
 }
+
+func (n *spanNode) failed() bool { return n.span.Error && !n.benign }
+
+// httpLeaf reports whether the span is an HTTP request with no spans below
+// it.
+func (n *spanNode) httpLeaf() bool { return len(n.children) == 0 && isHTTPSpan(n.span) }
 
 func (n *spanNode) dur() time.Duration { return n.end.Sub(n.start) }
 
@@ -99,12 +129,16 @@ func buildWaterfall(t JobTrace, now time.Time, lim waterfallLimits) waterfall {
 		if n.end.Before(n.start) {
 			n.end = n.start
 		}
-		if s.Error {
-			w.Errors++
-		}
 		nodes[s.ID] = n
 		ordered = append(ordered, n)
 	}
+	for _, n := range ordered {
+		n.benign = benignError(n, nodes)
+		if n.failed() {
+			w.Errors++
+		}
+	}
+	w.Tool = toolName(t.Spans)
 	var roots []*spanNode
 	for _, n := range ordered {
 		if p, ok := nodes[n.span.ParentID]; ok && p != n && !ancestorOf(n, p, nodes) {
@@ -152,7 +186,19 @@ func buildWaterfall(t JobTrace, now time.Time, lim waterfallLimits) waterfall {
 	tiny := time.Duration(float64(w.Total) * lim.Tiny)
 	var emit func(n *spanNode, depth int)
 	emit = func(n *spanNode, depth int) {
-		w.Rows = append(w.Rows, w.row(n.span, n.start, n.end, depth, len(n.children) > 0, n.critical, 0))
+		w.Rows = append(w.Rows, w.nodeRow(n, depth))
+		// HTTP requests are grouped under one row, unless they failed.
+		// Requests on the critical path stay in the group, which is marked
+		// critical; the critical path view lists them on their own.
+		var http []*spanNode
+		for _, c := range n.children {
+			if c.httpLeaf() && !c.failed() {
+				http = append(http, c)
+			}
+		}
+		if len(http) < 2 {
+			http = nil
+		}
 		var pending []*spanNode
 		flush := func() {
 			switch len(pending) {
@@ -165,14 +211,21 @@ func buildWaterfall(t JobTrace, now time.Time, lim waterfallLimits) waterfall {
 					first = minTime(first, p.start)
 					last = maxTime(last, p.end)
 				}
-				label := TraceSpan{ID: "more-" + pending[0].span.ID, ParentID: n.span.ID, Name: fmt.Sprintf("%d more spans", len(pending)), Category: pending[0].span.Category}
+				label := TraceSpan{ID: "more-" + pending[0].span.ID, ParentID: n.span.ID, Name: fmt.Sprintf("%d more spans", len(pending)), Category: pending[0].span.Category, Source: pending[0].span.Source}
 				w.Rows = append(w.Rows, w.row(label, first, last, depth+1, false, false, len(pending)))
 				w.Folded += len(pending)
 			}
 			pending = nil
 		}
 		for _, c := range n.children {
-			if fold && len(c.children) == 0 && !c.critical && !c.span.Error && c.dur() < tiny {
+			if len(http) > 0 && slices.Contains(http, c) {
+				if c == http[0] {
+					flush()
+					w.emitHTTPGroup(n, http, depth+1)
+				}
+				continue
+			}
+			if fold && len(c.children) == 0 && !c.critical && !c.failed() && c.dur() < tiny {
 				pending = append(pending, c)
 				continue
 			}
@@ -192,16 +245,101 @@ func buildWaterfall(t JobTrace, now time.Time, lim waterfallLimits) waterfall {
 		w.Rows[i].Index = i
 	}
 
-	var all []waterfallRow
+	var all, noHTTP []waterfallRow
 	for _, n := range ordered {
 		if n.span.Category == TraceJob {
 			continue
 		}
-		all = append(all, w.row(n.span, n.start, n.end, 0, len(n.children) > 0, n.critical, 0))
+		r := w.nodeRow(n, 0)
+		all = append(all, r)
+		if n.httpLeaf() {
+			w.HTTPRequests++
+		} else {
+			noHTTP = append(noHTTP, r)
+		}
 	}
-	slices.SortStableFunc(all, func(a, b waterfallRow) int { return cmp.Compare(b.Duration, a.Duration) })
-	w.Slowest = all[:min(10, len(all))]
+	slowest := func(a, b waterfallRow) int { return cmp.Compare(b.Duration, a.Duration) }
+	slices.SortStableFunc(all, slowest)
+	slices.SortStableFunc(noHTTP, slowest)
+	w.SlowestAll = all[:min(10, len(all))]
+	w.Slowest = noHTTP[:min(10, len(noHTTP))]
 	return w
+}
+
+// emitHTTPGroup adds a row standing for HTTP requests, followed by a row
+// for each request one level deeper.
+func (w *waterfall) emitHTTPGroup(parent *spanNode, reqs []*spanNode, depth int) {
+	first, last := reqs[0].start, reqs[0].end
+	var total time.Duration
+	critical := false
+	for _, r := range reqs {
+		first = minTime(first, r.start)
+		last = maxTime(last, r.end)
+		total += r.dur()
+		critical = critical || r.critical
+	}
+	id := "http-" + parent.span.ID
+	label := TraceSpan{ID: id, ParentID: parent.span.ID, Name: fmt.Sprintf("%d HTTP requests", len(reqs)),
+		Category: TraceTool, Source: reqs[0].span.Source}
+	g := w.row(label, first, last, depth, true, critical, 0)
+	g.HTTPGroup, g.HTTPTotal = true, total
+	w.Rows = append(w.Rows, g)
+	for _, r := range reqs {
+		row := w.nodeRow(r, depth+1)
+		row.Group = id
+		w.Rows = append(w.Rows, row)
+	}
+}
+
+func (w waterfall) nodeRow(n *spanNode, depth int) waterfallRow {
+	r := w.row(n.span, n.start, n.end, depth, len(n.children) > 0, n.critical, 0)
+	r.Failed, r.Benign = n.failed(), n.benign
+	return r
+}
+
+// benignMessage is the status message OpenTofu gives spans it marks as
+// errors without any error, such as installing a local module.
+const benignMessage = "no diagnostics"
+
+// benignError reports whether a span a tool marked as an error did not
+// fail: the tool gave no reason, or only benignMessage, and the command it
+// ran under (or, without one, its parent) finished without an error.
+func benignError(n *spanNode, nodes map[string]*spanNode) bool {
+	s := n.span
+	if !s.Error || s.Source == "" || s.Source == atlantisSource || (s.Message != "" && s.Message != benignMessage) {
+		return false
+	}
+	parent := nodes[s.ParentID]
+	seen := map[*spanNode]bool{n: true}
+	for cur := parent; cur != nil && !seen[cur]; cur = nodes[cur.span.ParentID] {
+		seen[cur] = true
+		if cur.span.Category == TraceCommand {
+			parent = cur
+			break
+		}
+	}
+	return parent != nil && parent != n && !parent.span.Error && !parent.span.Running()
+}
+
+// isHTTPSpan reports whether a span is an HTTP request a tool made, such
+// as a registry lookup or a provider download.
+func isHTTPSpan(s TraceSpan) bool {
+	if s.Source == atlantisSource {
+		return false
+	}
+	if strings.HasPrefix(s.Name, "HTTP ") {
+		return true
+	}
+	var client, method bool
+	for _, a := range s.Attributes {
+		switch a.Key {
+		case "span.kind":
+			client = a.Value == "client"
+		case "http.request.method":
+			method = true
+		}
+	}
+	return client && method
 }
 
 // ancestorOf reports whether n is an ancestor of p, which would make a
@@ -292,9 +430,62 @@ func (r waterfallRow) barWidth() string {
 	return strconv.FormatFloat(min(max(r.Width, 1), waterfallWidth-min(r.Offset, waterfallWidth-1)), 'f', 2, 64)
 }
 
-// categoryLabel names a span category for people.
-func categoryLabel(c TraceCategory) string {
-	switch c {
+// atlantisSource is the Source of spans Atlantis records itself.
+const atlantisSource = "atlantis"
+
+const (
+	toolOpenTofu  = "OpenTofu"
+	toolTerraform = "Terraform"
+	toolEither    = "OpenTofu / Terraform"
+)
+
+// sourceTool names the tool behind a span's reported service name, such as
+// "OpenTofu CLI", or "" when it is neither OpenTofu nor Terraform.
+func sourceTool(source string) string {
+	s := strings.ToLower(source)
+	switch {
+	case strings.Contains(s, "opentofu") || strings.Contains(s, "tofu"):
+		return toolOpenTofu
+	case strings.Contains(s, "terraform"):
+		return toolTerraform
+	}
+	return ""
+}
+
+// toolName names the tool that reported a trace's spans.
+func toolName(spans []TraceSpan) string {
+	found := ""
+	for _, s := range spans {
+		if s.Source == atlantisSource || s.Source == "" {
+			continue
+		}
+		t := sourceTool(s.Source)
+		if t == "" || (found != "" && found != t) {
+			return toolEither
+		}
+		found = t
+	}
+	if found == "" {
+		return toolEither
+	}
+	return found
+}
+
+// reportedBy names what reported a span, for people.
+func reportedBy(source string) string {
+	if source == atlantisSource {
+		return "Atlantis"
+	}
+	if t := sourceTool(source); t != "" {
+		return t
+	}
+	return source
+}
+
+// categoryLabel names a span's category for people. Spans of the tool
+// category are named after the tool that reported them.
+func categoryLabel(s TraceSpan) string {
+	switch s.Category {
 	case TraceJob:
 		return "Atlantis job"
 	case TraceStep:
@@ -306,7 +497,10 @@ func categoryLabel(c TraceCategory) string {
 	case TraceResource:
 		return "Resource"
 	}
-	return "Terraform"
+	if t := sourceTool(s.Source); t != "" {
+		return t
+	}
+	return toolEither
 }
 
 // categoryClass is the CSS class that colors a span's bar.

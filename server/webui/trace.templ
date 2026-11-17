@@ -38,7 +38,7 @@ func hiddenAttributeKeys(s TraceSpan) []string {
 
 func rowClasses(r waterfallRow) string {
 	c := []string{"wf-row", depthClass(r.Depth), categoryClass(r.Span.Category)}
-	if r.Span.Error {
+	if r.Failed {
 		c = append(c, "err")
 	}
 	if r.Critical {
@@ -47,7 +47,10 @@ func rowClasses(r waterfallRow) string {
 	if r.Fold() {
 		c = append(c, "fold")
 	}
-	if r.Span.Running() && !r.Fold() {
+	if r.HTTPGroup {
+		c = append(c, "group")
+	}
+	if r.Span.Running() && !r.Fold() && !r.HTTPGroup {
 		c = append(c, "live")
 	}
 	return strings.Join(c, " ")
@@ -78,13 +81,18 @@ func spanSubject(s TraceSpan) string {
 	return provider
 }
 
+// groupLabel names an HTTP group row: "12 HTTP requests · 1.4s total".
+func groupLabel(r waterfallRow) string {
+	return r.Span.Name + " · " + formatSpanDuration(r.HTTPTotal) + " total"
+}
+
 func rowLabel(r waterfallRow) string {
 	label := r.Span.Name
 	if subject := spanSubject(r.Span); subject != "" {
 		label = subject + " " + label
 	}
-	label += ", " + categoryLabel(r.Span.Category) + ", " + formatSpanDuration(r.Duration)
-	if r.Span.Error {
+	label += ", " + categoryLabel(r.Span) + ", " + formatSpanDuration(r.Duration)
+	if r.Failed {
 		label += ", failed"
 	}
 	if r.Critical {
@@ -110,14 +118,24 @@ func rowSearchText(s TraceSpan) string {
 
 func durNanos(d int64) string { return strconv.FormatInt(d, 10) }
 
-func spanStatus(s TraceSpan) string {
+func spanStatus(r waterfallRow) string {
 	switch {
-	case s.Error:
+	case r.Failed:
 		return "Failed"
-	case s.Running():
+	case r.Span.Running():
 		return "Running"
 	}
 	return "OK"
+}
+
+// benignNote explains a span the tool reported as an error that is not
+// counted as failed.
+func benignNote(r waterfallRow) string {
+	how := "with no diagnostics"
+	if r.Span.Message == "" {
+		how = "without a message"
+	}
+	return "Reported as an error by " + reportedBy(r.Span.Source) + " " + how + "; the command succeeded."
 }
 
 templ timingPage(m meta, d timingData) {
@@ -192,7 +210,7 @@ templ waterfallView(d timingData) {
 			<button type="button" class="chip" data-wf-critical aria-pressed="false">Critical path only</button>
 			<span class="wf-legend grow-right" aria-label="Colors">
 				<span><i class="sw cat-atlantis"></i>Atlantis</span>
-				<span><i class="sw cat-tool"></i>Terraform</span>
+				<span><i class="sw cat-tool"></i>{ d.W.Tool }</span>
 				<span><i class="sw cat-provider"></i>Provider</span>
 				<span><i class="sw cat-resource"></i>Resource</span>
 				<span><i class="sw err"></i>Failed</span>
@@ -228,32 +246,84 @@ templ waterfallView(d timingData) {
 			<aside class="wf-details" id="wf-detail" aria-live="polite" aria-label="Span details">
 				<p class="muted" data-wf-empty>Select a span to see its details.</p>
 				for _, r := range d.W.Rows {
-					@spanDetail(r, d.Trace.AllAttributes)
+					if !r.HTTPGroup {
+						@spanDetail(r, d.Trace.AllAttributes)
+					}
 				}
 			</aside>
 		</div>
 		<section class="wf-top">
-			<h2>Slowest spans</h2>
-			<ol>
-				for _, r := range d.W.Slowest {
-					<li>
-						<button type="button" class="linkbtn" data-wf-goto={ r.Span.ID }>
-							if subject := spanSubject(r.Span); subject != "" {
-								{ subject } <span class="wf-op">{ r.Span.Name }</span>
-							} else {
-								{ r.Span.Name }
-							}
-						</button>
-						<span class="muted">{ categoryLabel(r.Span.Category) }</span>
-						<span class="num grow-right">{ formatSpanDuration(r.Duration) }</span>
-					</li>
+			<div class="wf-top-head">
+				<h2>Slowest spans</h2>
+				if d.W.HTTPRequests > 0 {
+					<button type="button" class="chip" data-wf-http aria-pressed="false" aria-controls="wf-top-all wf-top-main" hidden>Include HTTP requests</button>
 				}
-			</ol>
+			</div>
+			@slowestList("wf-top-main", d.W.Slowest, false)
+			if d.W.HTTPRequests > 0 {
+				@slowestList("wf-top-all", d.W.SlowestAll, true)
+			}
 		</section>
 	}
 }
 
+templ slowestList(id string, rows []waterfallRow, hidden bool) {
+	<ol id={ id } hidden?={ hidden }>
+		for _, r := range rows {
+			<li>
+				<button type="button" class="linkbtn" data-wf-goto={ r.Span.ID }>
+					if subject := spanSubject(r.Span); subject != "" {
+						{ subject } <span class="wf-op">{ r.Span.Name }</span>
+					} else {
+						{ r.Span.Name }
+					}
+				</button>
+				<span class="muted">{ categoryLabel(r.Span) }</span>
+				if r.Failed {
+					<span class="bad-text">Failed</span>
+				}
+				<span class="num grow-right">{ formatSpanDuration(r.Duration) }</span>
+			</li>
+		}
+	</ol>
+}
+
 templ waterfallRowView(r waterfallRow) {
+	if r.HTTPGroup {
+		@httpGroupRowView(r)
+	} else {
+		@spanRowView(r)
+	}
+}
+
+// httpGroupRowView is the row that stands for HTTP requests. Its label
+// expands and collapses them; the requests start collapsed once scripts
+// run.
+templ httpGroupRowView(r waterfallRow) {
+	<div
+		class={ rowClasses(r) }
+		role="listitem"
+		data-id={ r.Span.ID }
+		data-depth={ strconv.Itoa(r.Depth) }
+		data-dur={ durNanos(int64(r.Duration)) }
+		data-i={ strconv.Itoa(r.Index) }
+		data-name=""
+		data-group="1"
+	>
+		<div class="wf-name">
+			<span class="wf-twisty wf-caret" aria-hidden="true"></span>
+			<button type="button" class="wf-label" data-wf-toggle aria-expanded="true" title={ groupLabel(r) }>{ groupLabel(r) }</button>
+		</div>
+		<div class="wf-bar">
+			<svg viewBox="0 0 1000 14" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+				<rect x={ r.barX() } y="2" width={ r.barWidth() } height="10"></rect>
+			</svg>
+		</div>
+		<div class="wf-dur num">{ formatSpanDuration(r.Duration) }</div>
+	</div>
+}
+
+templ spanRowView(r waterfallRow) {
 	<div
 		class={ rowClasses(r) }
 		role="listitem"
@@ -264,6 +334,9 @@ templ waterfallRowView(r waterfallRow) {
 		data-name={ rowSearchText(r.Span) }
 		if r.Critical {
 			data-crit="1"
+		}
+		if r.Group != "" {
+			data-group-of={ r.Group }
 		}
 	>
 		<div class="wf-name">
@@ -298,10 +371,10 @@ templ spanDetail(r waterfallRow, all bool) {
 		}
 		<dl class="kv">
 			<dt>Kind</dt>
-			<dd>{ categoryLabel(r.Span.Category) }</dd>
+			<dd>{ categoryLabel(r.Span) }</dd>
 			if r.Span.Source != "" && !r.Fold() {
 				<dt>Reported by</dt>
-				<dd>{ r.Span.Source }</dd>
+				<dd>{ reportedBy(r.Span.Source) }</dd>
 			}
 			<dt>Starts at</dt>
 			<dd class="num">+{ formatSpanDuration(r.StartOffset) }</dd>
@@ -310,10 +383,14 @@ templ spanDetail(r waterfallRow, all bool) {
 			if !r.Fold() {
 				<dt>Status</dt>
 				<dd
-					if r.Span.Error {
+					if r.Failed {
 						class="bad-text"
 					}
-				>{ spanStatus(r.Span) }</dd>
+				>{ spanStatus(r) }</dd>
+				if r.Benign {
+					<dt>Reported status</dt>
+					<dd data-wf-benign>{ benignNote(r) }</dd>
+				}
 				if r.Span.Message != "" {
 					<dt>Message</dt>
 					<dd class="mono">{ r.Span.Message }</dd>

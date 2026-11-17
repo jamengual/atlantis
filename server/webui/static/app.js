@@ -319,12 +319,15 @@ setupPlanView();
 // ---------- timing waterfall ----------
 // The server renders every row in tree order. This element collapses
 // subtrees, sorts by duration, filters by name, shows a span's details, and
-// reloads the waterfall while the job runs. Without JavaScript the full tree
-// and every row stay visible.
+// reloads the waterfall while the job runs. HTTP request groups start
+// collapsed; a filter that matches a request opens its group. Without
+// JavaScript the full tree and every row stay visible.
 class TraceView extends HTMLElement {
   connectedCallback() {
     this.body = this.querySelector("[data-wf-body]");
-    this.state = { collapsed: new Set(), selected: null, filter: "", sort: false, critical: false };
+    // collapsed holds closed span rows; expanded holds open HTTP groups,
+    // which are closed by default.
+    this.state = { collapsed: new Set(), expanded: new Set(), selected: null, filter: "", sort: false, critical: false, http: false };
     this.addEventListener("click", (e) => this.onClick(e));
     this.addEventListener("input", (e) => {
       if (!e.target.matches("[data-wf-filter]")) return;
@@ -348,6 +351,9 @@ class TraceView extends HTMLElement {
     if (filter && filter.value !== this.state.filter) filter.value = this.state.filter;
     this.querySelector("[data-wf-sort]")?.setAttribute("aria-pressed", String(this.state.sort));
     this.querySelector("[data-wf-critical]")?.setAttribute("aria-pressed", String(this.state.critical));
+    const http = this.querySelector("[data-wf-http]");
+    if (http) http.hidden = false;
+    this.showHTTP();
     this.apply();
     if (this.state.selected) this.select(this.state.selected, false);
   }
@@ -360,16 +366,41 @@ class TraceView extends HTMLElement {
     return this.querySelector('.wf-row[data-id="' + CSS.escape(id) + '"]');
   }
 
+  isCollapsed(r) {
+    const id = r.dataset.id;
+    return r.dataset.group ? !this.state.expanded.has(id) : this.state.collapsed.has(id);
+  }
+
+  setCollapsed(r, closed) {
+    const id = r.dataset.id;
+    if (r.dataset.group) {
+      if (closed) this.state.expanded.delete(id); else this.state.expanded.add(id);
+    } else if (closed) this.state.collapsed.add(id);
+    else this.state.collapsed.delete(id);
+  }
+
+  // showHTTP switches the slowest list between leaving HTTP requests out
+  // and including them.
+  showHTTP() {
+    const all = this.querySelector("#wf-top-all");
+    if (!all) return;
+    all.hidden = !this.state.http;
+    const main = this.querySelector("#wf-top-main");
+    if (main) main.hidden = this.state.http;
+    this.querySelector("[data-wf-http]")?.setAttribute("aria-pressed", String(this.state.http));
+  }
+
   onClick(e) {
     const t = e.target;
     const toggle = t.closest("[data-wf-toggle]");
     if (toggle) {
-      const id = toggle.closest(".wf-row").dataset.id;
-      if (this.state.collapsed.has(id)) this.state.collapsed.delete(id);
-      else this.state.collapsed.add(id);
+      const row = toggle.closest(".wf-row");
+      this.setCollapsed(row, !this.isCollapsed(row));
       this.apply();
       return;
     }
+    const http = t.closest("[data-wf-http]");
+    if (http) { this.state.http = !this.state.http; this.showHTTP(); return; }
     const label = t.closest("[data-wf-select]");
     if (label) { this.select(label.closest(".wf-row").dataset.id, false); return; }
     const sort = t.closest("[data-wf-sort]");
@@ -390,6 +421,11 @@ class TraceView extends HTMLElement {
     const flat = s.sort || q !== "" || s.critical;
     list.classList.toggle("flat", flat);
     const tree = this.rows().sort((a, b) => Number(a.dataset.i) - Number(b.dataset.i));
+    // A filter that matches an HTTP request opens its group, and the group
+    // stays open after the filter is cleared.
+    if (q !== "") {
+      for (const r of tree) if (r.dataset.groupOf && r.dataset.name.includes(q)) s.expanded.add(r.dataset.groupOf);
+    }
     const order = s.sort ? [...tree].sort((a, b) => Number(b.dataset.dur) - Number(a.dataset.dur)) : tree;
     // Moving rows drops keyboard focus, so only move them when the order
     // changes.
@@ -405,17 +441,18 @@ class TraceView extends HTMLElement {
       const depth = Number(r.dataset.depth);
       let hidden;
       if (flat) {
-        hidden = (q !== "" && !r.dataset.name.includes(q)) || (s.critical && !r.dataset.crit);
+        // Group rows only structure the tree.
+        hidden = !!r.dataset.group || (q !== "" && !r.dataset.name.includes(q)) || (s.critical && !r.dataset.crit);
       } else {
         if (depth <= hideBelow) hideBelow = Infinity;
         hidden = depth > hideBelow;
-        if (!hidden && s.collapsed.has(r.dataset.id)) hideBelow = depth;
+        if (!hidden && this.isCollapsed(r)) hideBelow = depth;
       }
       r.hidden = hidden;
       if (!hidden) shown++;
       const tw = r.querySelector("[data-wf-toggle]");
       if (tw) {
-        const open = !s.collapsed.has(r.dataset.id);
+        const open = !this.isCollapsed(r);
         tw.setAttribute("aria-expanded", String(open));
         tw.setAttribute("aria-label", (open ? "Collapse " : "Expand ") + r.querySelector(".wf-label").textContent);
       }
@@ -439,6 +476,7 @@ class TraceView extends HTMLElement {
     if (reveal && row.hidden) {
       // Open the collapsed ancestors and drop filters that hide the row.
       this.state.collapsed.clear();
+      if (row.dataset.groupOf) this.state.expanded.add(row.dataset.groupOf);
       this.state.filter = "";
       this.state.critical = false;
       this.setup();
@@ -461,17 +499,16 @@ class TraceView extends HTMLElement {
     const visible = this.rows().filter((r) => !r.hidden);
     const i = visible.indexOf(row);
     const focus = (r) => { if (r) { r.querySelector(".wf-label").focus(); e.preventDefault(); } };
-    const id = row.dataset.id;
     switch (e.key) {
       case "ArrowDown": focus(visible[i + 1]); break;
       case "ArrowUp": focus(visible[i - 1]); break;
       case "Home": focus(visible[0]); break;
       case "End": focus(visible[visible.length - 1]); break;
       case "ArrowRight":
-        if (row.querySelector("[data-wf-toggle]") && this.state.collapsed.has(id)) { this.state.collapsed.delete(id); this.apply(); e.preventDefault(); }
+        if (row.querySelector("[data-wf-toggle]") && this.isCollapsed(row)) { this.setCollapsed(row, false); this.apply(); e.preventDefault(); }
         break;
       case "ArrowLeft":
-        if (row.querySelector("[data-wf-toggle]") && !this.state.collapsed.has(id)) { this.state.collapsed.add(id); this.apply(); e.preventDefault(); }
+        if (row.querySelector("[data-wf-toggle]") && !this.isCollapsed(row)) { this.setCollapsed(row, true); this.apply(); e.preventDefault(); }
         break;
     }
   }
