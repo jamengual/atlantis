@@ -188,6 +188,7 @@ const (
 	WebProxyEmailHeaderFlag          = "web-proxy-email-header"
 	WebProxyGroupsHeaderFlag         = "web-proxy-groups-header"
 	WebProxyTrustedCIDRsFlag         = "web-proxy-trusted-cidrs"
+	WebTracesAllAttributesFlag       = "web-traces-all-attributes"
 	WebRoleAdminsFlag                = "web-role-admins"
 	WebRoleOperatorsFlag             = "web-role-operators"
 	WebRoleViewersFlag               = "web-role-viewers"
@@ -802,6 +803,10 @@ var boolFlags = map[string]boolFlag{
 	WebBasicAuthFlag: {
 		description:  "Switches on or off the Basic Authentication on the HTTP Middleware interface",
 		defaultValue: DefaultWebBasicAuth,
+	},
+	WebTracesAllAttributesFlag: {
+		description:  "Experimental. Keep every span attribute value in job timing traces, not only resource, provider, module, and error details. Values such as download URLs can hold signed tokens. Requires the web-traces experiment.",
+		defaultValue: false,
 	},
 	RestrictFileList: {
 		description:  "Block plan requests from projects outside the files modified in the pull request.",

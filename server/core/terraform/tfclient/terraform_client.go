@@ -26,6 +26,7 @@ import (
 	"github.com/runatlantis/atlantis/server/core/terraform/ansi"
 	"github.com/runatlantis/atlantis/server/events/command"
 	"github.com/runatlantis/atlantis/server/jobs"
+	"github.com/runatlantis/atlantis/server/jobtrace"
 	"github.com/runatlantis/atlantis/server/logging"
 )
 
@@ -88,12 +89,50 @@ type DefaultClient struct {
 	// processes tracks running Terraform commands by job, so a job can be
 	// stopped. Nil tracks nothing.
 	processes *jobs.ProcessRegistry
+
+	// traces records a span for each Terraform command a job runs and
+	// passes the trace context to the process. Nil records nothing.
+	traces *jobtrace.Recorder
 }
 
 // TrackProcesses records the Terraform commands the client runs in r, so
 // that stopping a job interrupts them.
 func (c *DefaultClient) TrackProcesses(r *jobs.ProcessRegistry) {
 	c.processes = r
+}
+
+// TraceCommands records a span for each Terraform command a job runs in r,
+// and has the command export its own spans under it.
+func (c *DefaultClient) TraceCommands(r *jobtrace.Recorder) {
+	c.traces = r
+}
+
+// traceCommand starts the span of one command and returns the environment
+// with the trace context added.
+func (c *DefaultClient) traceCommand(ctx command.ProjectContext, d terraform.Distribution, args []string, envVars []string) (*jobtrace.ActiveSpan, []string) {
+	if c.traces == nil {
+		return nil, envVars
+	}
+	span := c.traces.Start(ctx.JobID, commandSpanName(c.effectiveDistribution(d).BinName(), args), jobtrace.CategoryCommand)
+	return span, append(envVars, span.Env(envVars)...)
+}
+
+// commandSpanName names a command by its binary and subcommand, such as
+// "tofu plan" or "terraform workspace select". Other arguments are left out
+// because they can carry variable values.
+func commandSpanName(bin string, args []string) string {
+	name := bin
+	if len(args) == 0 {
+		return name
+	}
+	name += " " + args[0]
+	switch args[0] {
+	case "workspace", "state", "providers":
+		if len(args) > 1 && !strings.HasPrefix(args[1], "-") {
+			name += " " + args[1]
+		}
+	}
+	return name
 }
 
 // versionRegex extracts the version from `terraform version` output.
@@ -404,8 +443,11 @@ func (c *DefaultClient) RunCommandWithVersion(ctx command.ProjectContext, path s
 	if err != nil {
 		return "", err
 	}
+	span, env := c.traceCommand(ctx, d, args, cmd.Env)
+	cmd.Env = env
 	start := time.Now()
 	out, err := c.processes.CombinedOutput(ctx.JobID, cmd, nil)
+	span.End(err)
 	dur := time.Since(start)
 	log := ctx.Log.With("duration", dur)
 	if err != nil {
@@ -572,7 +614,8 @@ func (c *DefaultClient) RunCommandAsync(ctx command.ProjectContext, path string,
 		return inCh, outCh
 	}
 
-	runner := models.NewArgvCommandRunner(argv, display, envVars, path, !ctx.SuppressJobOutput, c.projectCmdOutputHandler).WithProcesses(c.processes)
+	span, envVars := c.traceCommand(ctx, d, args, envVars)
+	runner := models.NewArgvCommandRunner(argv, display, envVars, path, !ctx.SuppressJobOutput, c.projectCmdOutputHandler).WithProcesses(c.processes).WithExit(span.End)
 	inCh, outCh := runner.RunCommandAsync(ctx)
 	return inCh, outCh
 }

@@ -40,12 +40,21 @@ type ShellCommandRunner struct {
 	cmd           *exec.Cmd
 	shell         *valid.CommandShell
 	processes     *jobs.ProcessRegistry
+	onExit        func(error)
 }
 
 // WithProcesses tracks the command under its job in r, so stopping the job
 // interrupts the command. It returns s.
 func (s *ShellCommandRunner) WithProcesses(r *jobs.ProcessRegistry) *ShellCommandRunner {
 	s.processes = r
+	return s
+}
+
+// WithExit calls f once the command has exited, or failed to start, with
+// the command's error. Tracing uses it to end the command's span. It
+// returns s.
+func (s *ShellCommandRunner) WithExit(f func(error)) *ShellCommandRunner {
+	s.onExit = f
 	return s
 }
 
@@ -160,7 +169,11 @@ func (s *ShellCommandRunner) RunCommandAsync(ctx command.ProjectContext) (chan<-
 	// return our channels.
 	go func() {
 		// Ensure we close our channels when we exit.
+		var exitErr error
 		defer func() {
+			if s.onExit != nil {
+				s.onExit(exitErr)
+			}
 			close(outCh)
 			close(inCh)
 		}()
@@ -172,6 +185,7 @@ func (s *ShellCommandRunner) RunCommandAsync(ctx command.ProjectContext) (chan<-
 		// A stopped job runs no further commands.
 		if err := s.processes.Err(ctx.JobID); err != nil {
 			ctx.Log.Info("not starting %q because the job was stopped", s.describe())
+			exitErr = err
 			outCh <- Line{Err: err}
 			return
 		}
@@ -182,6 +196,7 @@ func (s *ShellCommandRunner) RunCommandAsync(ctx command.ProjectContext) (chan<-
 		if err != nil {
 			err = fmt.Errorf("running '%s' in '%s': %w", s.describe(), s.workingDir, err)
 			ctx.Log.Err("%s", err.Error())
+			exitErr = err
 			outCh <- Line{Err: err}
 			return
 		}
@@ -263,6 +278,7 @@ func (s *ShellCommandRunner) RunCommandAsync(ctx command.ProjectContext) (chan<-
 		if err != nil {
 			err = s.processes.Wrap(ctx.JobID, fmt.Errorf("running %s in '%s': %w", s.describeSplit(), s.workingDir, err))
 			log.Err("%s", err.Error())
+			exitErr = err
 			outCh <- Line{Err: err}
 		} else {
 			log.Info("successfully ran %s in '%s'",

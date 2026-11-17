@@ -18,6 +18,7 @@ import (
 	"github.com/runatlantis/atlantis/server/core/terraform"
 	"github.com/runatlantis/atlantis/server/events/command"
 	"github.com/runatlantis/atlantis/server/jobs"
+	"github.com/runatlantis/atlantis/server/jobtrace"
 )
 
 // RunStepRunner runs custom commands.
@@ -31,6 +32,9 @@ type RunStepRunner struct {
 	// Processes tracks run steps by job, so stopping a job interrupts them.
 	// Nil tracks nothing.
 	Processes *jobs.ProcessRegistry
+	// Traces passes the run step's trace context to the command, so
+	// Terraform commands it runs report their spans. Nil passes nothing.
+	Traces *jobtrace.Recorder
 }
 
 func (r *RunStepRunner) Run(
@@ -103,6 +107,7 @@ func (r *RunStepRunner) Run(
 		finalEnvVars = append(finalEnvVars, fmt.Sprintf("%s=%s", key, val))
 	}
 
+	finalEnvVars = append(finalEnvVars, r.Traces.Env(ctx.JobID, finalEnvVars)...)
 	runner := models.NewShellCommandRunner(shell, command, finalEnvVars, path, streamOutput, r.ProjectCmdOutputHandler).WithProcesses(r.Processes)
 	output, err := runner.Run(ctx)
 

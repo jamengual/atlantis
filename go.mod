@@ -60,12 +60,14 @@ require (
 	github.com/zclconf/go-cty v1.16.3
 	gitlab.com/gitlab-org/api/client-go v0.161.1
 	go.etcd.io/bbolt v1.4.3
+	go.opentelemetry.io/proto/otlp v1.11.0
 	go.uber.org/mock v0.6.0
 	go.uber.org/zap v1.27.1
 	go.yaml.in/yaml/v4 v4.0.0-rc.6
 	golang.org/x/oauth2 v0.38.0
 	golang.org/x/term v0.48.0
 	golang.org/x/text v0.44.0
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -170,7 +172,6 @@ require (
 	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/time v0.12.0 // indirect
 	golang.org/x/tools v0.52.0 // indirect
-	google.golang.org/protobuf v1.36.10 // indirect
 )
 
 tool (

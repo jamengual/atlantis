@@ -43,6 +43,9 @@ func TestValidateExperiments(t *testing.T) {
 		{name: "remediation requires detection", config: server.UserConfig{Experiments: []string{"drift-detection"}, APISecret: token, EnableDriftRemediation: true}, err: "--enable-drift-remediation requires --enable-drift-detection"},
 		{name: "drift requires authentication", config: server.UserConfig{Experiments: []string{"drift-detection"}, EnableDriftDetection: true}, err: "enable-drift-detection requires api-secret"},
 		{name: "unknown", config: server.UserConfig{Experiments: []string{"unknown"}}, err: `unknown server experiment "unknown"`},
+		{name: "traces with the web UI", config: server.UserConfig{Experiments: []string{"web-ui", "web-traces"}, WebTracesAllAttributes: true}},
+		{name: "traces need the web UI", config: server.UserConfig{Experiments: []string{"web-traces"}}, err: `the "web-traces" experiment shows traces in the web UI and requires the "web-ui" experiment`},
+		{name: "all attributes need traces", config: server.UserConfig{Experiments: []string{"web-ui"}, WebTracesAllAttributes: true}, err: `web-traces-all-attributes requires the "web-traces" experiment`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

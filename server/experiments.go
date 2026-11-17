@@ -16,9 +16,12 @@ const (
 	apiExperiment   = "api"
 	driftExperiment = "drift-detection"
 	webUIExperiment = "web-ui"
+	// webTracesExperiment records job timing traces and shows them in the
+	// web UI. It needs the web UI.
+	webTracesExperiment = "web-traces"
 )
 
-var knownExperiments = []string{apiExperiment, driftExperiment, webUIExperiment}
+var knownExperiments = []string{apiExperiment, driftExperiment, webUIExperiment, webTracesExperiment}
 
 // ValidateExperiments checks permissions and prerequisites before startup.
 func (c UserConfig) ValidateExperiments() error {
@@ -46,6 +49,13 @@ func (c UserConfig) ValidateExperiments() error {
 	}
 	if c.webSignInConfigured() && !slices.Contains(c.Experiments, webUIExperiment) {
 		return fmt.Errorf("web UI sign-in (web-sso-providers or web-proxy-auth) requires the %q experiment; add it to experiments or remove the sign-in settings; see %s", webUIExperiment, ExperimentsDocumentationURL)
+	}
+	traces := slices.Contains(c.Experiments, webTracesExperiment)
+	if traces && !slices.Contains(c.Experiments, webUIExperiment) {
+		return fmt.Errorf("the %q experiment shows traces in the web UI and requires the %q experiment; add it to experiments or remove %q; see %s", webTracesExperiment, webUIExperiment, webTracesExperiment, ExperimentsDocumentationURL)
+	}
+	if c.WebTracesAllAttributes && !traces {
+		return fmt.Errorf("web-traces-all-attributes requires the %q experiment; add it to experiments or remove web-traces-all-attributes; see %s", webTracesExperiment, ExperimentsDocumentationURL)
 	}
 	if c.EnableDriftRemediation && !c.EnableDriftDetection {
 		return fmt.Errorf("--enable-drift-remediation requires --enable-drift-detection; see %s", ExperimentsDocumentationURL)

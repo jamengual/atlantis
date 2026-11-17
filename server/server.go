@@ -42,6 +42,7 @@ import (
 	"github.com/runatlantis/atlantis/server/core/redis"
 	"github.com/runatlantis/atlantis/server/core/terraform/tfclient"
 	"github.com/runatlantis/atlantis/server/jobs"
+	"github.com/runatlantis/atlantis/server/jobtrace"
 	"github.com/runatlantis/atlantis/server/metrics"
 	"github.com/runatlantis/atlantis/server/scheduled"
 	"github.com/runatlantis/atlantis/server/webui"
@@ -133,6 +134,9 @@ type Server struct {
 	// experiment is enabled.
 	WebUI    *webui.Handler
 	database db.Database
+	// traceReceiver collects job timing traces with the web-traces
+	// experiment. Nil without it.
+	traceReceiver *jobtrace.Server
 }
 
 // Config holds config for server that isn't passed in by the user.
@@ -466,6 +470,20 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 		jobProcesses = jobs.NewProcessRegistry()
 		maintenance = locking.NewMaintenance()
 	}
+	// Job timing traces are recorded only with the web-traces experiment.
+	// Without it there is no receiver, and commands get no OpenTelemetry
+	// variables.
+	var jobTraces *jobtrace.Recorder
+	var traceReceiver *jobtrace.Server
+	if slices.Contains(userConfig.Experiments, webTracesExperiment) {
+		jobTraces = jobtrace.NewRecorder()
+		jobTraces.AllAttributes = userConfig.WebTracesAllAttributes
+		traceReceiver, err = jobtrace.Listen(jobTraces, logger)
+		if err != nil {
+			return nil, err
+		}
+		logger.Info("receiving job timing traces on %q", traceReceiver.Addr())
+	}
 
 	distribution := terraform.NewDistribution(userConfig.DefaultTFDistribution)
 
@@ -490,6 +508,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 	}
 	if terraformClient != nil {
 		terraformClient.TrackProcesses(jobProcesses)
+		terraformClient.TraceCommands(jobTraces)
 	}
 	markdownRenderer := events.NewMarkdownRenderer(
 		gitlabClient.SupportsCommonMark(),
@@ -682,6 +701,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 		TerraformBinDir:         terraformBinDir,
 		ProjectCmdOutputHandler: projectCmdOutputHandler,
 		Processes:               jobProcesses,
+		Traces:                  jobTraces,
 	}
 	drainer := &events.Drainer{}
 	statusController := &controllers.StatusController{
@@ -697,6 +717,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 		PreWorkflowHookRunner: runtime.DefaultPreWorkflowHookRunner{
 			OutputHandler: projectCmdOutputHandler,
 			Processes:     jobProcesses,
+			Traces:        jobTraces,
 		},
 		CommitStatusUpdater: commitStatusUpdater,
 		Router:              router,
@@ -709,6 +730,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 		PostWorkflowHookRunner: runtime.DefaultPostWorkflowHookRunner{
 			OutputHandler: projectCmdOutputHandler,
 			Processes:     jobProcesses,
+			Traces:        jobTraces,
 		},
 		CommitStatusUpdater: commitStatusUpdater,
 		Router:              router,
@@ -757,7 +779,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 			WorkingDir:               workingDir,
 			Database:                 database,
 			PullClosedTemplate:       &events.PullClosedEventTemplate{},
-			LogStreamResourceCleaner: projectCmdOutputHandler,
+			LogStreamResourceCleaner: logStreamCleaner(projectCmdOutputHandler, jobTraces),
 			VCSClient:                vcsClient,
 			PlanStore:                planStore,
 		},
@@ -831,6 +853,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 
 	projectCommandRunner := &events.DefaultProjectCommandRunner{
 		Processes:               jobProcesses,
+		Traces:                  jobTraces,
 		Maintenance:             maintenance,
 		VcsClient:               vcsClient,
 		VarFileAllowlistChecker: varFileAllowlistChecker,
@@ -1211,6 +1234,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 				WorkingDir:     workingDir,
 				SharePlanDir:   userConfig.SharePlanDir,
 				Stops:          jobProcesses,
+				Traces:         traceSource(jobTraces),
 				Maintenance:    maintenance,
 				PolicySets:     &globalCfg.PolicySets,
 				Drift:          driftResults,
@@ -1268,6 +1292,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 		EnableProfilingAPI:             userConfig.EnableProfilingAPI,
 		Experiments:                    slices.Clone(userConfig.Experiments),
 		WebUI:                          webUIHandler,
+		traceReceiver:                  traceReceiver,
 		database:                       database,
 	}
 
@@ -1416,6 +1441,11 @@ func (s *Server) Start() error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if s.traceReceiver != nil {
+		if err := s.traceReceiver.Close(ctx); err != nil {
+			s.Logger.Warn("stopping the job trace receiver: %s", err)
+		}
+	}
 	if err := server.Shutdown(ctx); err != nil {
 		return fmt.Errorf("while shutting down: %s", err)
 	}
@@ -1623,4 +1653,22 @@ func ParseAtlantisURL(u string) (*url.URL, error) {
 	// use it in the rest of the program.
 	parsed.Path = strings.TrimSuffix(parsed.Path, "/")
 	return parsed, nil
+}
+
+// logStreamCleaner removes job traces together with job output when a pull
+// request closes. Without traces it is the output handler itself.
+func logStreamCleaner(output jobs.ProjectCommandOutputHandler, traces *jobtrace.Recorder) events.ResourceCleaner {
+	if traces == nil {
+		return output
+	}
+	return jobtrace.OutputCleaner{Output: output, Recorder: traces}
+}
+
+// traceSource keeps a nil recorder from becoming a non-nil interface, so
+// the web UI knows tracing is off.
+func traceSource(r *jobtrace.Recorder) webui.TraceSource {
+	if r == nil {
+		return nil
+	}
+	return r
 }

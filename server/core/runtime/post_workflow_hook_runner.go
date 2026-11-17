@@ -12,6 +12,7 @@ import (
 
 	"github.com/runatlantis/atlantis/server/events/models"
 	"github.com/runatlantis/atlantis/server/jobs"
+	"github.com/runatlantis/atlantis/server/jobtrace"
 )
 
 //go:generate go tool pegomock generate --package mocks -o mocks/mock_post_workflows_hook_runner.go PostWorkflowHookRunner
@@ -24,6 +25,9 @@ type DefaultPostWorkflowHookRunner struct {
 	// Processes tracks the hook's process so stopping the hook's job
 	// interrupts it. Nil tracks nothing.
 	Processes *jobs.ProcessRegistry
+	// Traces records the hook as a traced job, so Terraform commands it runs
+	// report their spans. Nil records nothing.
+	Traces *jobtrace.Recorder
 }
 
 func (wh DefaultPostWorkflowHookRunner) Run(ctx models.WorkflowHookCommandContext, command string, shell string, shellArgs string, path string) (string, string, error) {
@@ -59,12 +63,14 @@ func (wh DefaultPostWorkflowHookRunner) Run(ctx models.WorkflowHookCommandContex
 		finalEnvVars = append(finalEnvVars, fmt.Sprintf("%s=%s", key, val))
 	}
 
-	cmd.Env = finalEnvVars
+	span := wh.Traces.Start(ctx.HookID, "post-workflow hook", jobtrace.CategoryJob)
+	cmd.Env = append(finalEnvVars, span.Env(finalEnvVars)...)
 	out, err := wh.Processes.CombinedOutput(ctx.HookID, cmd, func(msg string) {
 		if !ctx.SuppressJobOutput {
 			wh.OutputHandler.SendWorkflowHook(ctx, msg+"\r\n", false)
 		}
 	})
+	span.End(err)
 
 	outString := strings.ReplaceAll(string(out), "\n", "\r\n")
 	if !ctx.SuppressJobOutput {

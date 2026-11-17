@@ -22,6 +22,7 @@ import (
 	"github.com/runatlantis/atlantis/server/events/vcs"
 	"github.com/runatlantis/atlantis/server/events/webhooks"
 	"github.com/runatlantis/atlantis/server/jobs"
+	"github.com/runatlantis/atlantis/server/jobtrace"
 	"github.com/runatlantis/atlantis/server/logging"
 	"github.com/runatlantis/atlantis/server/utils"
 )
@@ -382,6 +383,42 @@ type DefaultProjectCommandRunner struct {
 	// project a window covers can't be applied, or planned when the window
 	// freezes plans too. Nil means there are none.
 	Maintenance *locking.Maintenance
+	// Traces records a span for each job and step. Nil records nothing.
+	Traces *jobtrace.Recorder
+}
+
+// traceJob starts the span covering a whole job. Call the returned function
+// with the job's output to end it.
+func (p *DefaultProjectCommandRunner) traceJob(ctx command.ProjectContext, cmd command.Name) func(command.ProjectCommandOutput) command.ProjectCommandOutput {
+	span := p.Traces.Start(ctx.JobID, "atlantis "+cmd.String(), jobtrace.CategoryJob,
+		jobtrace.Attribute{Key: "atlantis.dir", Value: ctx.RepoRelDir},
+		jobtrace.Attribute{Key: "atlantis.workspace", Value: ctx.Workspace},
+		jobtrace.Attribute{Key: "atlantis.project", Value: ctx.ProjectName})
+	return func(out command.ProjectCommandOutput) command.ProjectCommandOutput {
+		switch {
+		case out.Error != nil:
+			span.End(out.Error)
+		case out.Failure != "":
+			span.End(errors.New(out.Failure))
+		default:
+			span.End(nil)
+		}
+		return out
+	}
+}
+
+// stepSpanName names a step's span. A run step is named by its program
+// only, since the rest of the command can hold values.
+func stepSpanName(step valid.Step) string {
+	switch step.StepName {
+	case "run":
+		if fields := strings.Fields(step.RunCommand); len(fields) > 0 {
+			return "run: " + fields[0]
+		}
+	case "env":
+		return "env " + step.EnvVarName
+	}
+	return step.StepName
 }
 
 // maintenanceErr returns an error when a maintenance window freezes the
@@ -420,39 +457,42 @@ func (p *DefaultProjectCommandRunner) workingDirLockMetadata(ctx command.Project
 
 // Plan runs terraform plan for the project described by ctx.
 func (p *DefaultProjectCommandRunner) Plan(ctx command.ProjectContext) command.ProjectCommandOutput {
+	done := p.traceJob(ctx, command.Plan)
 	if err := p.maintenanceErr(ctx, command.Plan); err != nil {
-		return command.ProjectCommandOutput{Error: err}
+		return done(command.ProjectCommandOutput{Error: err})
 	}
 	planSuccess, failure, err := p.doPlan(ctx)
-	return command.ProjectCommandOutput{
+	return done(command.ProjectCommandOutput{
 		PlanSuccess: planSuccess,
 		Error:       err,
 		Failure:     failure,
-	}
+	})
 }
 
 // PolicyCheck evaluates policies defined with Rego for the project described by ctx.
 func (p *DefaultProjectCommandRunner) PolicyCheck(ctx command.ProjectContext) command.ProjectCommandOutput {
+	done := p.traceJob(ctx, command.PolicyCheck)
 	policySuccess, failure, err := p.doPolicyCheck(ctx)
-	return command.ProjectCommandOutput{
+	return done(command.ProjectCommandOutput{
 		PolicyCheckResults: policySuccess,
 		Error:              err,
 		Failure:            failure,
-	}
+	})
 }
 
 // Apply runs terraform apply for the project described by ctx.
 func (p *DefaultProjectCommandRunner) Apply(ctx command.ProjectContext) command.ProjectCommandOutput {
+	done := p.traceJob(ctx, command.Apply)
 	if err := p.maintenanceErr(ctx, command.Apply); err != nil {
-		return command.ProjectCommandOutput{Error: err}
+		return done(command.ProjectCommandOutput{Error: err})
 	}
 	applyOut, applyURL, failure, err := p.doApply(ctx)
-	return command.ProjectCommandOutput{
+	return done(command.ProjectCommandOutput{
 		Failure:         failure,
 		Error:           err,
 		ApplySuccess:    applyOut,
 		ApplySuccessURL: applyURL,
-	}
+	})
 }
 
 func (p *DefaultProjectCommandRunner) ApprovePolicies(ctx command.ProjectContext) command.ProjectCommandOutput {
@@ -465,38 +505,41 @@ func (p *DefaultProjectCommandRunner) ApprovePolicies(ctx command.ProjectContext
 }
 
 func (p *DefaultProjectCommandRunner) Version(ctx command.ProjectContext) command.ProjectCommandOutput {
+	done := p.traceJob(ctx, command.Version)
 	versionOut, failure, err := p.doVersion(ctx)
-	return command.ProjectCommandOutput{
+	return done(command.ProjectCommandOutput{
 		Failure:        failure,
 		Error:          err,
 		VersionSuccess: versionOut,
-	}
+	})
 }
 
 // Import runs terraform import for the project described by ctx.
 func (p *DefaultProjectCommandRunner) Import(ctx command.ProjectContext) command.ProjectCommandOutput {
+	done := p.traceJob(ctx, command.Import)
 	if err := p.maintenanceErr(ctx, command.Import); err != nil {
-		return command.ProjectCommandOutput{Error: err}
+		return done(command.ProjectCommandOutput{Error: err})
 	}
 	importSuccess, failure, err := p.doImport(ctx)
-	return command.ProjectCommandOutput{
+	return done(command.ProjectCommandOutput{
 		ImportSuccess: importSuccess,
 		Error:         err,
 		Failure:       failure,
-	}
+	})
 }
 
 // StateRm runs terraform state rm for the project described by ctx.
 func (p *DefaultProjectCommandRunner) StateRm(ctx command.ProjectContext) command.ProjectCommandOutput {
+	done := p.traceJob(ctx, command.State)
 	if err := p.maintenanceErr(ctx, command.State); err != nil {
-		return command.ProjectCommandOutput{Error: err}
+		return done(command.ProjectCommandOutput{Error: err})
 	}
 	stateRmSuccess, failure, err := p.doStateRm(ctx)
-	return command.ProjectCommandOutput{
+	return done(command.ProjectCommandOutput{
 		StateRmSuccess: stateRmSuccess,
 		Error:          err,
 		Failure:        failure,
-	}
+	})
 }
 
 func (p *DefaultProjectCommandRunner) doApprovePolicies(ctx command.ProjectContext) (*models.PolicyCheckResults, string, error) {
@@ -878,8 +921,10 @@ func (p *DefaultProjectCommandRunner) doPlan(ctx command.ProjectContext) (*model
 	defer unlockFn()
 
 	// Clone is idempotent so okay to run even if the repo was already cloned.
+	cloneSpan := p.Traces.Start(ctx.JobID, "clone", jobtrace.CategoryStep)
 	repoDir, err := p.WorkingDir.Clone(ctx.Log, ctx.HeadRepo, ctx.Pull, ctx.Workspace)
 	if err != nil {
+		cloneSpan.End(err)
 		if unlockErr := lockAttempt.UnlockFn(); unlockErr != nil {
 			ctx.Log.Err("error unlocking state after plan error: %v", unlockErr)
 		}
@@ -887,6 +932,7 @@ func (p *DefaultProjectCommandRunner) doPlan(ctx command.ProjectContext) (*model
 	}
 
 	mergedAgain, err := p.WorkingDir.MergeAgain(ctx.Log, ctx.HeadRepo, ctx.Pull, ctx.Workspace)
+	cloneSpan.End(err)
 	if err != nil {
 		if unlockErr := lockAttempt.UnlockFn(); unlockErr != nil {
 			ctx.Log.Err("error unlocking state after plan error: %v", unlockErr)
@@ -1169,7 +1215,9 @@ func (p *DefaultProjectCommandRunner) doVersion(ctx command.ProjectContext) (ver
 
 func (p *DefaultProjectCommandRunner) doImport(ctx command.ProjectContext) (out *models.ImportSuccess, failure string, err error) {
 	// Clone is idempotent so okay to run even if the repo was already cloned.
+	cloneSpan := p.Traces.Start(ctx.JobID, "clone", jobtrace.CategoryStep)
 	repoDir, cloneErr := p.WorkingDir.Clone(ctx.Log, ctx.HeadRepo, ctx.Pull, ctx.Workspace)
+	cloneSpan.End(cloneErr)
 	if cloneErr != nil {
 		return nil, "", cloneErr
 	}
@@ -1218,7 +1266,9 @@ func (p *DefaultProjectCommandRunner) doImport(ctx command.ProjectContext) (out 
 
 func (p *DefaultProjectCommandRunner) doStateRm(ctx command.ProjectContext) (out *models.StateRmSuccess, failure string, err error) {
 	// Clone is idempotent so okay to run even if the repo was already cloned.
+	cloneSpan := p.Traces.Start(ctx.JobID, "clone", jobtrace.CategoryStep)
 	repoDir, cloneErr := p.WorkingDir.Clone(ctx.Log, ctx.HeadRepo, ctx.Pull, ctx.Workspace)
+	cloneSpan.End(cloneErr)
 	if cloneErr != nil {
 		return nil, "", cloneErr
 	}
@@ -1300,6 +1350,7 @@ func (p *DefaultProjectCommandRunner) runSteps(steps []valid.Step, ctx command.P
 		}
 		var out string
 		var err error
+		span := p.Traces.Start(ctx.JobID, stepSpanName(step), jobtrace.CategoryStep)
 		switch step.StepName {
 		case "init":
 			out, err = p.InitStepRunner.Run(ctx, step.ExtraArgs, absPath, envs)
@@ -1311,10 +1362,12 @@ func (p *DefaultProjectCommandRunner) runSteps(steps []valid.Step, ctx command.P
 			out, err = p.PolicyCheckStepRunner.Run(ctx, step.ExtraArgs, absPath, envs)
 		case "apply":
 			if err = ValidateNonPRAPIRefUnchanged(ctx, absPath); err != nil {
+				span.End(err)
 				return outputs, err
 			}
 			if ctx.CommandName == command.Apply && p.ApplyPlanValidator != nil {
 				if err = p.ApplyPlanValidator.ValidateProjectPlan(ctx, absPath); err != nil {
+					span.End(err)
 					return outputs, err
 				}
 			}
@@ -1336,6 +1389,7 @@ func (p *DefaultProjectCommandRunner) runSteps(steps []valid.Step, ctx command.P
 		case "multienv":
 			out, err = p.MultiEnvStepRunner.Run(ctx, step.RunShell, step.RunCommand, absPath, envs, step.Output)
 		}
+		span.End(err)
 
 		// Keep all policy_check outputs for custom policy checks to maintain positional alignment with policy sets
 		// Empty outputs are still appended to prevent index mismatches

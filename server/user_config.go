@@ -161,21 +161,24 @@ type UserConfig struct {
 	WebGoogleClientSecret   string   `mapstructure:"web-google-client-secret"`
 	WebGoogleAllowedDomains []string `mapstructure:"web-google-allowed-domains"`
 	WebProxyAuth            string   `mapstructure:"web-proxy-auth"`
-	WebProxyALBArn          string   `mapstructure:"web-proxy-alb-arn"`
-	WebProxyIAPAudience     string   `mapstructure:"web-proxy-iap-audience"`
-	WebProxyUserHeader      string   `mapstructure:"web-proxy-user-header"`
-	WebProxyEmailHeader     string   `mapstructure:"web-proxy-email-header"`
-	WebProxyGroupsHeader    string   `mapstructure:"web-proxy-groups-header"`
-	WebProxyTrustedCIDRs    []string `mapstructure:"web-proxy-trusted-cidrs"`
-	WebRoleAdmins           []string `mapstructure:"web-role-admins"`
-	WebRoleOperators        []string `mapstructure:"web-role-operators"`
-	WebRoleViewers          []string `mapstructure:"web-role-viewers"`
-	WebRoleDefault          string   `mapstructure:"web-role-default"`
-	WebUsername             string   `mapstructure:"web-username"`
-	WebPassword             string   `mapstructure:"web-password"`
-	WriteGitCreds           bool     `mapstructure:"write-git-creds"`
-	WebsocketCheckOrigin    bool     `mapstructure:"websocket-check-origin"`
-	UseTFPluginCache        bool     `mapstructure:"use-tf-plugin-cache"`
+	// WebTracesAllAttributes keeps every span attribute value of job timing
+	// traces, not only the allowlisted ones. Needs the web-traces experiment.
+	WebTracesAllAttributes bool     `mapstructure:"web-traces-all-attributes"`
+	WebProxyALBArn         string   `mapstructure:"web-proxy-alb-arn"`
+	WebProxyIAPAudience    string   `mapstructure:"web-proxy-iap-audience"`
+	WebProxyUserHeader     string   `mapstructure:"web-proxy-user-header"`
+	WebProxyEmailHeader    string   `mapstructure:"web-proxy-email-header"`
+	WebProxyGroupsHeader   string   `mapstructure:"web-proxy-groups-header"`
+	WebProxyTrustedCIDRs   []string `mapstructure:"web-proxy-trusted-cidrs"`
+	WebRoleAdmins          []string `mapstructure:"web-role-admins"`
+	WebRoleOperators       []string `mapstructure:"web-role-operators"`
+	WebRoleViewers         []string `mapstructure:"web-role-viewers"`
+	WebRoleDefault         string   `mapstructure:"web-role-default"`
+	WebUsername            string   `mapstructure:"web-username"`
+	WebPassword            string   `mapstructure:"web-password"`
+	WriteGitCreds          bool     `mapstructure:"write-git-creds"`
+	WebsocketCheckOrigin   bool     `mapstructure:"websocket-check-origin"`
+	UseTFPluginCache       bool     `mapstructure:"use-tf-plugin-cache"`
 
 	// Experiments grants server-only permissions for experimental settings and routes.
 	Experiments []string `mapstructure:"experiments"`

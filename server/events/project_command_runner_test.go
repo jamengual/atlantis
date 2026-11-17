@@ -32,6 +32,7 @@ import (
 	vcsmocks "github.com/runatlantis/atlantis/server/events/vcs/mocks"
 	"github.com/runatlantis/atlantis/server/events/webhooks"
 	jobmocks "github.com/runatlantis/atlantis/server/jobs/mocks"
+	"github.com/runatlantis/atlantis/server/jobtrace"
 	"github.com/runatlantis/atlantis/server/logging"
 	"github.com/runatlantis/atlantis/server/utils"
 	. "github.com/runatlantis/atlantis/testing"
@@ -5945,4 +5946,82 @@ func TestDefaultProjectCommandRunner_PlanRejectsVarFileSymlinkOutsideRepo(t *tes
 	Assert(t, strings.Contains(res.Error.Error(), "var file path evil.tfvars resolves to"),
 		"unexpected error: %s", res.Error)
 	Assert(t, unlocked, "expected the project lock to be released after the rejection")
+}
+
+func TestDefaultProjectCommandRunner_PlanRecordsTrace(t *testing.T) {
+	for _, failInit := range []bool{false, true} {
+		t.Run(fmt.Sprintf("failInit=%t", failInit), func(t *testing.T) {
+			RegisterMockTestingT(t)
+			mockInit := mocks.NewMockStepRunner()
+			mockPlan := mocks.NewMockStepRunner()
+			mockRun := mocks.NewMockCustomStepRunner()
+			mockWorkingDir := mocks.NewMockWorkingDir()
+			mockLocker := mocks.NewMockProjectLocker()
+			traces := jobtrace.NewRecorder()
+			runner := events.DefaultProjectCommandRunner{
+				Locker:                    mockLocker,
+				LockURLGenerator:          mockURLGenerator{},
+				InitStepRunner:            mockInit,
+				PlanStepRunner:            mockPlan,
+				RunStepRunner:             mockRun,
+				EnvStepRunner:             &runtime.EnvStepRunner{},
+				WorkingDir:                mockWorkingDir,
+				WorkingDirLocker:          events.NewDefaultWorkingDirLocker(),
+				CommandRequirementHandler: mocks.NewMockCommandRequirementHandler(),
+				Traces:                    traces,
+			}
+			repoDir := t.TempDir()
+			When(mockWorkingDir.Clone(Any[logging.SimpleLogging](), Any[models.Repo](), Any[models.PullRequest](), Any[string]())).ThenReturn(repoDir, nil)
+			When(mockWorkingDir.GitReadLock(Any[models.Repo](), Any[models.PullRequest](), Any[string]())).ThenReturn(func() {})
+			When(mockLocker.TryLock(Any[logging.SimpleLogging](), Any[models.PullRequest](), Any[models.User](), Any[string](),
+				Any[models.Project](), AnyBool())).ThenReturn(&events.TryLockResponse{LockAcquired: true, LockKey: "lock-key", UnlockFn: func() error { return nil }}, nil)
+			ctx := command.ProjectContext{
+				Log:   logging.NewNoopLogger(t),
+				JobID: "job-1",
+				Steps: []valid.Step{
+					{StepName: "env", EnvVarName: "REGION", EnvVarValue: "us-east-1"},
+					{StepName: "run", RunCommand: "tflint --token=hunter2"},
+					{StepName: "init"},
+					{StepName: "plan"},
+				},
+				Workspace:  "default",
+				RepoRelDir: "network",
+			}
+			Ok(t, os.MkdirAll(filepath.Join(repoDir, "network"), 0o700))
+			Ok(t, os.WriteFile(filepath.Join(repoDir, "network", runtime.GetPlanFilename(ctx.Workspace, ctx.ProjectName)), []byte("plan"), 0o600))
+			envs := map[string]string{"REGION": "us-east-1"}
+			absPath := filepath.Join(repoDir, "network")
+			When(mockRun.Run(ctx, nil, "tflint --token=hunter2", absPath, envs, true, nil, nil)).ThenReturn("", nil)
+			if failInit {
+				When(mockInit.Run(ctx, nil, absPath, envs)).ThenReturn("", errors.New("init exploded"))
+			} else {
+				When(mockInit.Run(ctx, nil, absPath, envs)).ThenReturn("init", nil)
+			}
+			When(mockPlan.Run(ctx, nil, absPath, envs)).ThenReturn("plan", nil)
+
+			res := runner.Plan(ctx)
+			Equals(t, failInit, res.Error != nil)
+
+			tr, ok := traces.Snapshot("job-1")
+			Assert(t, ok, "no trace recorded")
+			Assert(t, tr.Finished, "job span left open")
+			var names []string
+			for _, s := range tr.Spans {
+				names = append(names, s.Name)
+				Assert(t, !s.End.IsZero(), "span %q left open", s.Name)
+				if s.Name != "atlantis plan" {
+					Equals(t, tr.Spans[0].ID, s.ParentID)
+				}
+				Assert(t, !strings.Contains(s.Name, "hunter2"), "span name leaks the run command: %q", s.Name)
+			}
+			want := []string{"atlantis plan", "clone", "env REGION", "run: tflint", "init", "plan"}
+			if failInit {
+				want = want[:5]
+			}
+			Equals(t, want, names)
+			Equals(t, failInit, tr.Spans[0].Error)
+			Equals(t, failInit, tr.Spans[4].Error)
+			Equals(t, "network", tr.Spans[0].Attributes[0].Value)
+		})
+	}
 }
