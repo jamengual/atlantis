@@ -15,7 +15,7 @@ import (
 func testPolicy(t *testing.T) *webauth.Policy {
 	t.Helper()
 	p, err := webauth.NewPolicy(webauth.PolicyConfig{
-		Flags: webauth.RoleMapper{Viewers: []string{"domain:acme.com"}},
+		Rules: webauth.RoleMapper{Viewers: []string{"domain:acme.com"}},
 		Access: &valid.Access{
 			Roles: valid.AccessRoles{
 				Admin:    []valid.AccessRule{{Group: "platform-admins"}, {Email: "lead@acme.com"}},

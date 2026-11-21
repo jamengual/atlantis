@@ -155,7 +155,7 @@ func newApprovalServer(t *testing.T, store *fakeStore, actions *fakeActions) (*h
 	t.Cleanup(srv.Close)
 	public, _ := url.Parse(srv.URL)
 	policy, err := webauth.NewPolicy(webauth.PolicyConfig{
-		Flags: webauth.RoleMapper{Admins: []string{"github:acme/platform"}, Operators: []string{"github:acme/sre", "sre"}, Viewers: []string{"github:acme"}},
+		Rules: webauth.RoleMapper{Admins: []string{"github:acme/platform"}, Operators: []string{"github:acme/sre", "sre"}, Viewers: []string{"github:acme"}},
 		Repos: []valid.Repo{
 			{IDRegex: regexp.MustCompile(".*")},
 			{IDRegex: regexp.MustCompile(`^github\.com/acme/prod-`), Access: &valid.RepoAccess{Permissions: valid.AccessPermissions{ApprovePolicies: "admin"}}},

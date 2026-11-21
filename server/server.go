@@ -1040,7 +1040,10 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 		}
 	}
 
-	accessPolicy, err := newAccessPolicy(userConfig, globalCfg)
+	if err := validateSignInExperiment(userConfig, globalCfg); err != nil {
+		return nil, err
+	}
+	accessPolicy, err := newAccessPolicy(globalCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -1193,7 +1196,7 @@ func NewServer(userConfig UserConfig, config Config) (*Server, error) {
 
 	var webUIHandler *webui.Handler
 	if slices.Contains(userConfig.Experiments, webUIExperiment) {
-		webAuth, err := newWebAuthManager(userConfig, parsedURL, logger, accessPolicy)
+		webAuth, err := newWebAuthManager(userConfig, parsedURL, logger, accessPolicy, signInConfig(globalCfg), os.Getenv)
 		if err != nil {
 			return nil, err
 		}

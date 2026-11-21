@@ -103,7 +103,7 @@ func NewManager(cfg Config) (*Manager, error) {
 		return nil, errors.New("web sign-in needs at least one provider or an authenticating proxy")
 	}
 	if cfg.Policy == nil {
-		policy, err := NewPolicy(PolicyConfig{Flags: cfg.Roles})
+		policy, err := NewPolicy(PolicyConfig{Rules: cfg.Roles})
 		if err != nil {
 			return nil, err
 		}

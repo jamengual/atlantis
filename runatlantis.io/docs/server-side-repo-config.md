@@ -671,5 +671,5 @@ mode: on_apply
 
 ## Web UI access policy
 
-The `access` section controls who can view the experimental web UI, unlock projects, and lock applies, and a `repos` entry's `access` key adjusts that for matching repositories. See [access policy](experiments.md#access-policy-in-the-server-side-repo-config) for the format and examples.
+The `access` section sets up the experimental web UI: how people sign in (`access.sign_in`), who holds each role, and which role each action needs, such as unlocking projects or locking applies. A `repos` entry's `access` key adjusts roles and permissions for matching repositories. See [web UI sign-in](experiments.md#web-ui-sign-in) and [access policy](experiments.md#access-policy) for the format and examples.
 

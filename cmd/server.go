@@ -165,39 +165,7 @@ const (
 	WebBasicAuthFlag                 = "web-basic-auth"
 	WebUsernameFlag                  = "web-username"
 	WebPasswordFlag                  = "web-password"
-	WebSSOProvidersFlag              = "web-sso-providers"
 	WebSessionSecretsFlag            = "web-session-secrets" // #nosec G101 -- flag name, not a credential
-	WebSessionLifetimeFlag           = "web-session-lifetime"
-	WebOIDCNameFlag                  = "web-oidc-name"
-	WebOIDCIssuerURLFlag             = "web-oidc-issuer-url"
-	WebOIDCClientIDFlag              = "web-oidc-client-id"
-	WebOIDCClientSecretFlag          = "web-oidc-client-secret" // #nosec G101 -- flag name, not a credential
-	WebOIDCScopesFlag                = "web-oidc-scopes"
-	WebOIDCGroupsClaimsFlag          = "web-oidc-groups-claims"
-	WebOIDCAllowedDomainsFlag        = "web-oidc-allowed-domains"
-	WebGitHubClientIDFlag            = "web-github-client-id"
-	WebGitHubClientSecretFlag        = "web-github-client-secret" // #nosec G101 -- flag name, not a credential
-	WebGitHubAllowedOrgsFlag         = "web-github-allowed-orgs"
-	WebGoogleClientIDFlag            = "web-google-client-id"
-	WebGoogleClientSecretFlag        = "web-google-client-secret" // #nosec G101 -- flag name, not a credential
-	WebGoogleAllowedDomainsFlag      = "web-google-allowed-domains"
-	WebGitLabClientIDFlag            = "web-gitlab-client-id"
-	WebGitLabClientSecretFlag        = "web-gitlab-client-secret" // #nosec G101 -- flag name, not a credential
-	WebGitLabAllowedGroupsFlag       = "web-gitlab-allowed-groups"
-	WebGiteaClientIDFlag             = "web-gitea-client-id"
-	WebGiteaClientSecretFlag         = "web-gitea-client-secret" // #nosec G101 -- flag name, not a credential
-	WebGiteaAllowedOrgsFlag          = "web-gitea-allowed-orgs"
-	WebProxyAuthFlag                 = "web-proxy-auth"
-	WebProxyALBArnFlag               = "web-proxy-alb-arn"
-	WebProxyIAPAudienceFlag          = "web-proxy-iap-audience"
-	WebProxyUserHeaderFlag           = "web-proxy-user-header"
-	WebProxyEmailHeaderFlag          = "web-proxy-email-header"
-	WebProxyGroupsHeaderFlag         = "web-proxy-groups-header"
-	WebProxyTrustedCIDRsFlag         = "web-proxy-trusted-cidrs"
-	WebRoleAdminsFlag                = "web-role-admins"
-	WebRoleOperatorsFlag             = "web-role-operators"
-	WebRoleViewersFlag               = "web-role-viewers"
-	WebRoleDefaultFlag               = "web-role-default"
 	EnableDriftDetectionFlag         = "enable-drift-detection"
 	EnableDriftRemediationFlag       = "enable-drift-remediation"
 	WebsocketCheckOrigin             = "websocket-check-origin"
@@ -240,52 +208,11 @@ const (
 	DefaultWebBasicAuth                 = false
 	DefaultWebUsername                  = "atlantis"
 	DefaultWebPassword                  = "atlantis"
-	DefaultWebSessionLifetime           = "4h"
-	DefaultWebOIDCName                  = "Single sign-on"
-	DefaultWebRoleDefault               = "none"
 )
 
 var stringSliceFlags = map[string]stringSliceFlag{
-	WebSSOProvidersFlag: {
-		description: "Experimental. Sign-in providers for the web UI at /ui, separated by commas: github, gitlab, gitea, oidc, google. Signing in with the VCS people already use lets roles follow its teams and groups. Requires the web-ui experiment and --web-session-secrets.",
-	},
 	WebSessionSecretsFlag: {
-		description: "Experimental. Secrets that encrypt web UI session cookies, separated by commas, each at least 32 random characters. The first encrypts; all decrypt, so add a new secret in front to rotate. Every replica needs the same secrets. Set with ATLANTIS_WEB_SESSION_SECRETS.",
-	},
-	WebOIDCScopesFlag: {
-		description:  "Experimental. OAuth scopes requested from the OIDC provider in addition to openid.",
-		defaultValue: []string{"email", "profile"},
-	},
-	WebOIDCGroupsClaimsFlag: {
-		description:  "Experimental. ID token claims read as groups, separated by commas. Use roles for Microsoft Entra ID app roles.",
-		defaultValue: []string{"groups"},
-	},
-	WebOIDCAllowedDomainsFlag: {
-		description: "Experimental. Only users whose verified email, or Google Workspace hd claim, is in one of these domains can sign in with OIDC.",
-	},
-	WebGitHubAllowedOrgsFlag: {
-		description: "Experimental. Only members of these GitHub organizations can sign in with GitHub. Required for GitHub sign-in. In role rules, GitHub groups are github:ORG and github:ORG/TEAM.",
-	},
-	WebGoogleAllowedDomainsFlag: {
-		description: "Experimental. Google Workspace domains allowed to sign in with Google, such as acme.com. Required for Google sign-in.",
-	},
-	WebGitLabAllowedGroupsFlag: {
-		description: "Experimental. Only members of these GitLab groups, or their subgroups, can sign in with GitLab, such as acme or acme/platform. Required for GitLab sign-in. In role rules, GitLab groups are gitlab:GROUP/SUBGROUP.",
-	},
-	WebGiteaAllowedOrgsFlag: {
-		description: "Experimental. Only members of these Gitea organizations can sign in with Gitea. Required for Gitea sign-in. In role rules, Gitea groups are gitea:ORG and gitea:ORG/TEAM.",
-	},
-	WebProxyTrustedCIDRsFlag: {
-		description: "Experimental. Networks allowed to send identity headers when --web-proxy-auth=header, such as 10.0.0.0/8. The connection address is checked, not X-Forwarded-For.",
-	},
-	WebRoleAdminsFlag: {
-		description: "Experimental. Who gets the web UI admin role: group:NAME (or a bare NAME), github:ORG or github:ORG/TEAM, gitlab:GROUP/SUBGROUP, gitea:ORG or gitea:ORG/TEAM, email:ADDRESS, domain:example.com, or * for everyone signed in. Admins can also lock and unlock applies.",
-	},
-	WebRoleOperatorsFlag: {
-		description: "Experimental. Who gets the web UI operator role, using the same rules as --web-role-admins. Operators can also discard plans and unlock projects.",
-	},
-	WebRoleViewersFlag: {
-		description: "Experimental. Who gets the web UI viewer role, using the same rules as --web-role-admins. Viewers can read pull requests, locks, and logs.",
+		description: "Experimental. Secrets that encrypt web UI session cookies when access.sign_in is set in the server-side repo config, separated by commas, each at least 32 random characters. The first encrypts; all decrypt, so add a new secret in front to rotate. Every replica needs the same secrets. Set with ATLANTIS_WEB_SESSION_SECRETS.",
 	},
 	ExperimentsFlag: {
 		description: "Server experiment permissions, separated by commas. Required for experimental feature settings and routes; activation settings still apply. See " + server.ExperimentsDocumentationURL + ".",
@@ -293,69 +220,6 @@ var stringSliceFlags = map[string]stringSliceFlag{
 }
 
 var stringFlags = map[string]stringFlag{
-	WebSessionLifetimeFlag: {
-		description:  "Experimental. How long a web UI sign-in lasts, such as 4h. Roles are fixed for the session, and sessions can only be ended early by rotating --web-session-secrets.",
-		defaultValue: DefaultWebSessionLifetime,
-	},
-	WebOIDCNameFlag: {
-		description:  "Experimental. Name shown on the OIDC sign-in button, such as Microsoft Entra ID.",
-		defaultValue: DefaultWebOIDCName,
-	},
-	WebOIDCIssuerURLFlag: {
-		description: "Experimental. OIDC issuer URL, such as https://login.microsoftonline.com/<tenant-id>/v2.0 or https://accounts.google.com.",
-	},
-	WebOIDCClientIDFlag: {
-		description: "Experimental. OIDC client ID registered for Atlantis.",
-	},
-	WebOIDCClientSecretFlag: {
-		description: "Experimental. OIDC client secret. Set with ATLANTIS_WEB_OIDC_CLIENT_SECRET.",
-	},
-	WebGitHubClientIDFlag: {
-		description: "Experimental. Client ID of the GitHub OAuth app or GitHub App used for web UI sign-in. Requires --web-github-allowed-orgs.",
-	},
-	WebGitHubClientSecretFlag: {
-		description: "Experimental. Client secret for GitHub sign-in. Set with ATLANTIS_WEB_GITHUB_CLIENT_SECRET.",
-	},
-	WebGoogleClientIDFlag: {
-		description: "Experimental. Client ID of the Google OAuth client used for web UI sign-in. Requires --web-google-allowed-domains.",
-	},
-	WebGoogleClientSecretFlag: {
-		description: "Experimental. Client secret for Google sign-in. Set with ATLANTIS_WEB_GOOGLE_CLIENT_SECRET.",
-	},
-	WebGitLabClientIDFlag: {
-		description: "Experimental. Application ID of the GitLab application used for web UI sign-in, on --gitlab-hostname. Requires --web-gitlab-allowed-groups.",
-	},
-	WebGitLabClientSecretFlag: {
-		description: "Experimental. Secret of the GitLab application used for web UI sign-in. Set with ATLANTIS_WEB_GITLAB_CLIENT_SECRET.",
-	},
-	WebGiteaClientIDFlag: {
-		description: "Experimental. Client ID of the Gitea OAuth2 application used for web UI sign-in, on --gitea-base-url. Requires --web-gitea-allowed-orgs.",
-	},
-	WebGiteaClientSecretFlag: {
-		description: "Experimental. Client secret for Gitea sign-in. Set with ATLANTIS_WEB_GITEA_CLIENT_SECRET.",
-	},
-	WebProxyAuthFlag: {
-		description: "Experimental. Take the web UI user from an authenticating proxy instead of a sign-in page: alb, iap, or header. Requires the web-ui experiment.",
-	},
-	WebProxyALBArnFlag: {
-		description: "Experimental. ARN of the AWS Application Load Balancer that signs the x-amzn-oidc-data header, for --web-proxy-auth=alb.",
-	},
-	WebProxyIAPAudienceFlag: {
-		description: "Experimental. Expected audience of the Google IAP assertion, such as /projects/123/global/backendServices/456, for --web-proxy-auth=iap.",
-	},
-	WebProxyUserHeaderFlag: {
-		description: "Experimental. Header that carries the user name, for --web-proxy-auth=header.",
-	},
-	WebProxyEmailHeaderFlag: {
-		description: "Experimental. Header that carries the user's email, for --web-proxy-auth=header.",
-	},
-	WebProxyGroupsHeaderFlag: {
-		description: "Experimental. Header that carries the user's groups, separated by commas, for --web-proxy-auth=header.",
-	},
-	WebRoleDefaultFlag: {
-		description:  "Experimental. Role for signed-in users who match no role rule: none, viewer, operator, or admin.",
-		defaultValue: DefaultWebRoleDefault,
-	},
 	ADTokenFlag: {
 		description: "Azure DevOps token of API user. Can also be specified via the ATLANTIS_AZUREDEVOPS_TOKEN environment variable.",
 	},
@@ -1132,21 +996,6 @@ func (s *ServerCmd) run() error {
 }
 
 func (s *ServerCmd) setDefaults(c *server.UserConfig, v *viper.Viper) {
-	if c.WebSessionLifetime == "" {
-		c.WebSessionLifetime = DefaultWebSessionLifetime
-	}
-	if c.WebOIDCName == "" {
-		c.WebOIDCName = DefaultWebOIDCName
-	}
-	if c.WebRoleDefault == "" {
-		c.WebRoleDefault = DefaultWebRoleDefault
-	}
-	if len(c.WebOIDCScopes) == 0 {
-		c.WebOIDCScopes = []string{"email", "profile"}
-	}
-	if len(c.WebOIDCGroupsClaims) == 0 {
-		c.WebOIDCGroupsClaims = []string{"groups"}
-	}
 	if c.AzureDevOpsHostname == "" {
 		c.AzureDevOpsHostname = DefaultADHostname
 	}

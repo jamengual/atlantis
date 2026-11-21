@@ -173,10 +173,11 @@ type Policy struct {
 	ownerTeams []string
 }
 
-// PolicyConfig is the input to NewPolicy: rules from server flags, and the
-// access sections of the server-side repo config.
+// PolicyConfig is the input to NewPolicy: the access sections of the
+// server-side repo config, plus Rules written as rule strings such as
+// "github:acme/sre", which tests and embedders use.
 type PolicyConfig struct {
-	Flags  RoleMapper
+	Rules  RoleMapper
 	Access *valid.Access
 	Repos  []valid.Repo
 	// PolicyOwnerTeams are the GitHub team slugs named as policy owners,
@@ -234,22 +235,22 @@ func accessRoles(a valid.AccessRoles) roleRules {
 	return roleRules{admin: fromAccessRules(a.Admin), operator: fromAccessRules(a.Operator), viewer: fromAccessRules(a.Viewer)}
 }
 
-// NewPolicy combines the role flags with the access sections of the
-// server-side repo config. Rules from both places add up.
+// NewPolicy combines Rules with the access sections of the server-side repo
+// config. Rules from both places add up.
 func NewPolicy(c PolicyConfig) (*Policy, error) {
-	if err := c.Flags.Validate(); err != nil {
+	if err := c.Rules.Validate(); err != nil {
 		return nil, err
 	}
-	p := &Policy{defaultRole: c.Flags.Default, requirements: map[Action]Role{}, ownerTeams: slices.Clone(c.PolicyOwnerTeams)}
+	p := &Policy{defaultRole: c.Rules.Default, requirements: map[Action]Role{}, ownerTeams: slices.Clone(c.PolicyOwnerTeams)}
 	maps.Copy(p.requirements, defaultRequirements)
 	var err error
-	if p.roles.admin, err = fromMapperRules(c.Flags.Admins); err != nil {
+	if p.roles.admin, err = fromMapperRules(c.Rules.Admins); err != nil {
 		return nil, err
 	}
-	if p.roles.operator, err = fromMapperRules(c.Flags.Operators); err != nil {
+	if p.roles.operator, err = fromMapperRules(c.Rules.Operators); err != nil {
 		return nil, err
 	}
-	if p.roles.viewer, err = fromMapperRules(c.Flags.Viewers); err != nil {
+	if p.roles.viewer, err = fromMapperRules(c.Rules.Viewers); err != nil {
 		return nil, err
 	}
 	if a := c.Access; a != nil {

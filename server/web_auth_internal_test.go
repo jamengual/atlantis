@@ -19,121 +19,90 @@ import (
 
 const testSessionSecret = "0123456789abcdef0123456789abcdef"
 
+// signInCfg is a server-side repo config with sign-in and one role rule.
+func signInCfg(signIn *valid.SignIn) valid.GlobalCfg {
+	return valid.GlobalCfg{Access: &valid.Access{
+		SignIn: signIn,
+		Roles:  valid.AccessRoles{Viewer: []valid.AccessRule{{Everyone: true}}},
+	}}
+}
+
+var testEnv = map[string]string{"OIDC_SECRET": "oidc-secret", "GH_SECRET": "gh-secret", "GL_SECRET": "gl-secret", "GT_SECRET": "gt-secret", "G_SECRET": "g-secret"}
+
+func oidcProvider() valid.SignInProvider {
+	return valid.SignInProvider{Type: "oidc", IssuerURL: "https://login.example.com", ClientID: "id", ClientSecretEnv: "OIDC_SECRET"}
+}
+
 func TestNewWebAuth(t *testing.T) {
 	public, _ := url.Parse("https://atlantis.example.com")
-	logger := logging.NewNoopLogger(t)
-	oidc := UserConfig{
-		WebSSOProviders:     []string{"oidc"},
-		WebSessionSecrets:   []string{testSessionSecret},
-		WebOIDCIssuerURL:    "https://login.example.com",
-		WebOIDCClientID:     "id",
-		WebOIDCClientSecret: "secret",
-		WebRoleViewers:      []string{"*"},
-	}
+	server := UserConfig{WebSessionSecrets: []string{testSessionSecret}, GitlabHostname: "gitlab.acme.internal", GiteaBaseURL: "https://gitea.acme.internal"}
 
-	m, err := webAuthFor(UserConfig{}, public, logger)
+	m, err := webAuthFor(server, valid.GlobalCfg{}, public, t)
 	Ok(t, err)
 	Assert(t, m == nil, "no sign-in configured should return nil")
 
-	m, err = webAuthFor(oidc, public, logger)
+	m, err = webAuthFor(server, signInCfg(&valid.SignIn{Providers: []valid.SignInProvider{oidcProvider()}}), public, t)
 	Ok(t, err)
 	Equals(t, "oidc", m.Providers()[0].ID)
+	Equals(t, "Single sign-on", m.Providers()[0].Name)
 
-	gh := UserConfig{WebSSOProviders: []string{"oidc", "github"}, WebSessionSecrets: []string{testSessionSecret},
-		WebOIDCIssuerURL: "https://login.example.com", WebOIDCClientID: "id", WebOIDCClientSecret: "secret",
-		WebGitHubClientID: "gh", WebGitHubClientSecret: "s", WebGitHubAllowedOrgs: []string{"acme"}, WebRoleDefault: "viewer"}
-	m, err = webAuthFor(gh, public, logger)
+	all := &valid.SignIn{Providers: []valid.SignInProvider{
+		{Type: "github", ClientID: "gh", ClientSecretEnv: "GH_SECRET", AllowedOrgs: []string{"acme"}},
+		{Type: "gitlab", ClientID: "gl", ClientSecretEnv: "GL_SECRET", AllowedGroups: []string{"acme"}},
+		{Type: "gitea", ClientID: "gt", ClientSecretEnv: "GT_SECRET", AllowedOrgs: []string{"acme"}},
+		{Type: "oidc", Name: "Microsoft Entra ID", IssuerURL: "https://login.microsoftonline.com/t/v2.0", ClientID: "id", ClientSecretEnv: "OIDC_SECRET", GroupsClaims: []string{"roles"}},
+		{Type: "google", ClientID: "g", ClientSecretEnv: "G_SECRET", AllowedDomains: []string{"acme.com"}},
+	}}
+	m, err = webAuthFor(server, signInCfg(all), public, t)
 	Ok(t, err)
-	Equals(t, 2, len(m.Providers()))
+	var names []string
+	for _, p := range m.Providers() {
+		names = append(names, p.ID+"="+p.Name)
+	}
+	Equals(t, []string{"github=GitHub", "gitlab=GitLab", "gitea=Gitea", "oidc=Microsoft Entra ID", "google=Google"}, names)
 
-	both := UserConfig{WebSSOProviders: []string{"oidc", "google"}, WebSessionSecrets: []string{testSessionSecret},
-		WebOIDCIssuerURL: "https://login.microsoftonline.com/t/v2.0", WebOIDCClientID: "id", WebOIDCClientSecret: "secret",
-		WebGoogleClientID: "g", WebGoogleClientSecret: "gs", WebGoogleAllowedDomains: []string{"acme.com"}, WebRoleViewers: []string{"*"}}
-	m, err = webAuthFor(both, public, logger)
-	Ok(t, err)
-	Equals(t, "oidc", m.Providers()[0].ID)
-	Equals(t, "google", m.Providers()[1].ID)
-	Equals(t, "Google", m.Providers()[1].Name)
-	both.WebGoogleAllowedDomains = nil
-	_, err = webAuthFor(both, public, logger)
-	ErrContains(t, "web-google-allowed-domains", err)
-
-	vcs := UserConfig{WebSSOProviders: []string{"github", "gitlab", "gitea"}, WebSessionSecrets: []string{testSessionSecret},
-		WebGitHubClientID: "gh", WebGitHubClientSecret: "s", WebGitHubAllowedOrgs: []string{"acme"},
-		WebGitLabClientID: "gl", WebGitLabClientSecret: "s", WebGitLabAllowedGroups: []string{"acme"}, GitlabHostname: "gitlab.acme.internal",
-		WebGiteaClientID: "gt", WebGiteaClientSecret: "s", WebGiteaAllowedOrgs: []string{"acme"}, GiteaBaseURL: "https://gitea.acme.internal",
-		WebRoleViewers: []string{"gitlab:acme", "gitea:acme", "github:acme"}}
-	m, err = webAuthFor(vcs, public, logger)
-	Ok(t, err)
-	Equals(t, 3, len(m.Providers()))
-	Equals(t, "GitLab", m.Providers()[1].Name)
-	Equals(t, "gitea", m.Providers()[2].ID)
-	vcs.WebGitLabAllowedGroups = nil
-	_, err = webAuthFor(vcs, public, logger)
-	ErrContains(t, "web-gitlab-allowed-groups", err)
-	vcs.WebGitLabAllowedGroups = []string{"acme"}
-	vcs.WebGiteaClientSecret = ""
-	_, err = webAuthFor(vcs, public, logger)
-	ErrContains(t, "web-gitea-client-secret", err)
-
-	proxy := UserConfig{WebProxyAuth: "header", WebProxyUserHeader: "X-User", WebProxyTrustedCIDRs: []string{"10.0.0.0/8"}, WebRoleViewers: []string{"*"}}
-	m, err = webAuthFor(proxy, public, logger)
+	proxy := &valid.SignIn{Proxy: &valid.SignInProxy{Type: "header", UserHeader: "X-User", TrustedCIDRs: []string{"10.0.0.0/8"}}}
+	m, err = webAuthFor(server, signInCfg(proxy), public, t)
 	Ok(t, err)
 	Assert(t, m.UsesProxy(), "proxy mode expected")
 
 	bad := []struct {
 		name   string
-		mutate func(*UserConfig)
+		server func(*UserConfig)
+		cfg    valid.GlobalCfg
 		want   string
 	}{
-		{"both modes", func(c *UserConfig) { c.WebProxyAuth = "alb" }, "can't be used together"},
-		{"no roles", func(c *UserConfig) { c.WebRoleViewers = nil }, "no role rules"},
-		{"bad default role", func(c *UserConfig) { c.WebRoleDefault = "root" }, "unknown role"},
-		{"bad role rule", func(c *UserConfig) { c.WebRoleAdmins = []string{"team:x"} }, "unknown kind"},
-		{"bad lifetime", func(c *UserConfig) { c.WebSessionLifetime = "forever" }, "positive duration"},
-		{"negative lifetime", func(c *UserConfig) { c.WebSessionLifetime = "-1h" }, "positive duration"},
-		{"no secrets", func(c *UserConfig) { c.WebSessionSecrets = nil }, "session secret"},
-		{"short secret", func(c *UserConfig) { c.WebSessionSecrets = []string{"short"} }, "at least 32"},
-		{"oidc incomplete", func(c *UserConfig) { c.WebOIDCClientSecret = "" }, "web-oidc-client-secret"},
-		{"unknown provider", func(c *UserConfig) { c.WebSSOProviders = []string{"saml"} }, "unknown provider"},
-		{"github incomplete", func(c *UserConfig) { c.WebSSOProviders = []string{"github"} }, "web-github-client-id"},
+		{"no roles", nil, valid.GlobalCfg{Access: &valid.Access{SignIn: &valid.SignIn{Providers: []valid.SignInProvider{oidcProvider()}}}}, "no role rules"},
+		{"secret env unset", nil, signInCfg(&valid.SignIn{Providers: []valid.SignInProvider{{Type: "github", ClientID: "gh", ClientSecretEnv: "UNSET_SECRET", AllowedOrgs: []string{"acme"}}}}),
+			"access.sign_in.providers[0] (github): the environment variable UNSET_SECRET named by client_secret_env is not set"},
+		{"no session secrets", func(c *UserConfig) { c.WebSessionSecrets = nil }, signInCfg(&valid.SignIn{Providers: []valid.SignInProvider{oidcProvider()}}), "session secret"},
+		{"short session secret", func(c *UserConfig) { c.WebSessionSecrets = []string{"short"} }, signInCfg(&valid.SignIn{Providers: []valid.SignInProvider{oidcProvider()}}), "at least 32"},
+		{"alb without arn", nil, signInCfg(&valid.SignIn{Proxy: &valid.SignInProxy{Type: "alb"}}), "load balancer ARN"},
+		{"iap without audience", nil, signInCfg(&valid.SignIn{Proxy: &valid.SignInProxy{Type: "iap"}}), "audience"},
+		{"header without cidrs", nil, signInCfg(&valid.SignIn{Proxy: &valid.SignInProxy{Type: "header", UserHeader: "X-User"}}), "trusted proxy networks"},
+		{"bad cidr", nil, signInCfg(&valid.SignIn{Proxy: &valid.SignInProxy{Type: "header", UserHeader: "X-User", TrustedCIDRs: []string{"10.0.0.1"}}}), "not a network"},
 	}
 	for _, tc := range bad {
 		t.Run(tc.name, func(t *testing.T) {
-			c := oidc
-			tc.mutate(&c)
-			_, err := webAuthFor(c, public, logger)
+			c := server
+			if tc.server != nil {
+				tc.server(&c)
+			}
+			_, err := webAuthFor(c, tc.cfg, public, t)
 			ErrContains(t, tc.want, err)
-			Assert(t, !strings.Contains(err.Error(), testSessionSecret), "error leaked a secret")
-		})
-	}
-
-	badProxy := []struct {
-		name string
-		c    UserConfig
-		want string
-	}{
-		{"alb without arn", UserConfig{WebProxyAuth: "alb", WebRoleViewers: []string{"*"}}, "load balancer ARN"},
-		{"iap without audience", UserConfig{WebProxyAuth: "iap", WebRoleViewers: []string{"*"}}, "audience"},
-		{"header without cidrs", UserConfig{WebProxyAuth: "header", WebProxyUserHeader: "X-User", WebRoleViewers: []string{"*"}}, "trusted proxy networks"},
-		{"bad cidr", UserConfig{WebProxyAuth: "header", WebProxyUserHeader: "X-User", WebProxyTrustedCIDRs: []string{"10.0.0.1"}, WebRoleViewers: []string{"*"}}, "not a network"},
-		{"unknown type", UserConfig{WebProxyAuth: "saml", WebRoleViewers: []string{"*"}}, "unknown proxy type"},
-	}
-	for _, tc := range badProxy {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := webAuthFor(tc.c, public, logger)
-			ErrContains(t, tc.want, err)
+			for _, secret := range append([]string{testSessionSecret}, "oidc-secret", "gh-secret") {
+				Assert(t, !strings.Contains(err.Error(), secret), "error leaked a secret")
+			}
 		})
 	}
 }
 
-func TestValidateExperiments_SignInNeedsWebUI(t *testing.T) {
-	c := UserConfig{WebSSOProviders: []string{"oidc"}}
-	ErrContains(t, `requires the "web-ui" experiment`, c.ValidateExperiments())
-	c = UserConfig{WebProxyAuth: "alb"}
-	ErrContains(t, `requires the "web-ui" experiment`, c.ValidateExperiments())
-	c.Experiments = []string{"web-ui"}
-	Ok(t, c.ValidateExperiments())
+func TestValidateSignInExperiment(t *testing.T) {
+	cfg := signInCfg(&valid.SignIn{Providers: []valid.SignInProvider{oidcProvider()}})
+	ErrContains(t, `access.sign_in in the server-side repo config) requires the "web-ui" experiment`, validateSignInExperiment(UserConfig{}, cfg))
+	Ok(t, validateSignInExperiment(UserConfig{Experiments: []string{"web-ui"}}, cfg))
+	Ok(t, validateSignInExperiment(UserConfig{}, valid.GlobalCfg{Access: &valid.Access{}}))
+	Ok(t, validateSignInExperiment(UserConfig{}, valid.GlobalCfg{}))
 }
 
 func TestRequestLogger_WebUISignInSkipsBasicAuthOnlyForUI(t *testing.T) {
@@ -167,7 +136,11 @@ func TestRequestLogger_WebUISignInSkipsBasicAuthOnlyForUI(t *testing.T) {
 	Equals(t, http.StatusUnauthorized, serve(without, "/ui"))
 }
 
-func webAuthFor(c UserConfig, public *url.URL, logger logging.SimpleLogging) (*webauth.Manager, error) {
-	m, _, err := newWebAuth(c, public, logger, valid.GlobalCfg{})
-	return m, err
+func webAuthFor(c UserConfig, globalCfg valid.GlobalCfg, public *url.URL, t *testing.T) (*webauth.Manager, error) {
+	t.Helper()
+	policy, err := newAccessPolicy(globalCfg)
+	if err != nil {
+		return nil, err
+	}
+	return newWebAuthManager(c, public, logging.NewNoopLogger(t), policy, signInConfig(globalCfg), func(k string) string { return testEnv[k] })
 }

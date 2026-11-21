@@ -119,7 +119,7 @@ A running plan, apply, policy check, or workflow hook has a **Stop** button on i
 
 The job log and page say who stopped the job, and the pull request comment for the failed plan or apply names them. Atlantis logs every stop with the user's identity.
 
-Stopping needs the operator role by default. Set `access.permissions.stop_job`, or `permissions.stop_job` on a `repos` entry, to change that (see [the access policy](#access-policy-in-the-server-side-repo-config)).
+Stopping needs the operator role by default. Set `access.permissions.stop_job`, or `permissions.stop_job` on a `repos` entry, to change that (see [the access policy](#access-policy)).
 
 Each job runs on one replica, and only that replica can stop it. With several replicas behind a load balancer, a request that reaches another replica is told that replica isn't running the job; try again. Atlantis only tracks processes to stop when the `web-ui` experiment is on; it starts each Terraform command in its own process group then. On Windows, stopping a job kills its process right away.
 
@@ -161,7 +161,7 @@ A policy owner can approve from the UI: **Approve policies** on the pull request
 
 Approving from the UI needs all of:
 
-- The `approve_policies` permission, operator by default. Set `access.permissions.approve_policies`, or `permissions.approve_policies` on a `repos` entry, to change that (see [the access policy](#access-policy-in-the-server-side-repo-config)).
+- The `approve_policies` permission, operator by default. Set `access.permissions.approve_policies`, or `permissions.approve_policies` on a `repos` entry, to change that (see [the access policy](#access-policy)).
 - [GitHub sign-in](#github) on the same host as the repository. Policy owners are GitHub users and teams, so Atlantis approves as the GitHub login you signed in with. Your teams come from your session; Atlantis keeps the teams named in `policies.owners` or a policy set's `owners` that you're a direct member of. As with the comment command, being in a child team doesn't make you an owner through its parent team, although it counts for the access policy.
 - Being a policy owner: a user or team in `policies.owners`, which approves every set, or in the set's own `owners`. Authors can't approve a set with `prevent_self_approve`, and an owner's approval counts once.
 
@@ -226,7 +226,7 @@ Responses are never cached (`Cache-Control: no-store`) and contain no session da
 
 ### Web UI sign-in
 
-Web UI sign-in replaces basic auth for the pages at `/ui` with your identity provider, and gives each person a role. It only applies to `/ui`; the existing UI and the API keep their current authentication. Sign-in requires the `web-ui` experiment.
+Web UI sign-in replaces basic auth for the pages at `/ui` with your VCS or identity provider, and gives each person a role. It only applies to `/ui`; the existing UI and the API keep their current authentication. Sign-in requires the `web-ui` experiment.
 
 | Role | Can |
 | --- | --- |
@@ -236,22 +236,52 @@ Web UI sign-in replaces basic auth for the pages at `/ui` with your identity pro
 
 Have people sign in with the VCS they already use for pull requests: [GitHub](#github), [GitLab](#gitlab), or [Gitea](#gitea). They're usually signed in to it already, often through your company's single sign-on, so signing in to Atlantis takes one click. Roles then follow the organizations, teams, and groups you already manage there, and the same rules can check `atlantis unlock` comments. Use [Microsoft Entra ID](#microsoft-entra-id) for Azure DevOps, whose users are Entra ID users, and [Google Workspace](#google-workspace) or [another OIDC provider](#okta-keycloak-auth0-amazon-cognito-and-dex) when people don't share a VCS.
 
-Roles come from [`--web-role-admins`](server-configuration.md#web-role-admins), [`--web-role-operators`](server-configuration.md#web-role-operators), and [`--web-role-viewers`](server-configuration.md#web-role-viewers). Each rule is `group:NAME` (or a bare `NAME`) for your identity provider's groups, `github:ORG` or `github:ORG/TEAM` for GitHub, `gitlab:GROUP/SUBGROUP` for GitLab, `gitea:ORG` or `gitea:ORG/TEAM` for Gitea, `email:ADDRESS`, `domain:example.com`, or `*` for everyone who signed in. Email and domain rules only match emails the provider marks as verified. The highest matching role wins. People who match no rule are turned away unless you set [`--web-role-default`](server-configuration.md#web-role-default). Atlantis refuses to start with sign-in enabled and no role rules.
-
-There are two ways to sign in:
-
-- **Sign-in pages.** Atlantis redirects to GitHub, GitLab, Gitea, or an OpenID Connect provider, using the authorization code flow with PKCE. Sessions are encrypted cookies, so any replica can serve any request without sticky sessions. Give every replica the same [`--web-session-secrets`](server-configuration.md#web-session-secrets).
-- **An authenticating proxy.** A load balancer or proxy in front of Atlantis signs people in and passes their identity on. Atlantis verifies it on every request and shows no sign-in page.
-
-Register `https://ATLANTIS_URL/ui/auth/callback/PROVIDER` as the redirect URI, where `PROVIDER` is `github`, `gitlab`, `gitea`, `oidc`, or `google`, using your [`--atlantis-url`](server-configuration.md#atlantis-url).
-
-#### Access policy in the server-side repo config
-
-For more than a few rules, or rules that differ per repository, put the policy in the `access` section of the [server-side repo config](server-side-repo-config.md). Rules there add to the `--web-role-*` flags.
+Sign-in and access are both set up in the `access` section of the [server-side repo config](server-side-repo-config.md), so a change to who can sign in or what they can do is reviewed like any other change to `repos.yaml`. The only server setting is [`--web-session-secrets`](server-configuration.md#web-session-secrets).
 
 ```yaml
 # repos.yaml
 access:
+  sign_in:
+    session_lifetime: 4h                  # optional; the default
+    providers:
+      - type: github
+        client_id: Iv1.0123456789abcdef
+        client_secret_env: GITHUB_SIGN_IN_SECRET   # read from this environment variable
+        allowed_orgs: [acme]
+  roles:
+    admin:
+      - github: acme/platform
+    operator:
+      - github: acme/sre
+    viewer:
+      - github: acme
+```
+
+```sh
+ATLANTIS_EXPERIMENTS=web-ui
+ATLANTIS_REPO_CONFIG=/etc/atlantis/repos.yaml
+ATLANTIS_WEB_SESSION_SECRETS="$(openssl rand -hex 32)"
+GITHUB_SIGN_IN_SECRET=...
+```
+
+Secrets are never written in `repos.yaml`. Each provider's `client_secret_env` names the environment variable that holds its client secret, and Atlantis refuses to start if that variable is empty. Use one name per provider, such as one set from a Kubernetes secret.
+
+There are two ways to sign in, and you choose one:
+
+- **Sign-in pages**, with `providers`. Atlantis redirects to GitHub, GitLab, Gitea, or an OpenID Connect provider, using the authorization code flow with PKCE. With more than one provider, the sign-in page shows a button for each, for example GitHub for staff and Entra ID for contractors outside your GitHub organization. Each `type` can be used once. Register `https://ATLANTIS_URL/ui/auth/callback/TYPE` as the redirect URI, using your [`--atlantis-url`](server-configuration.md#atlantis-url): `.../callback/github`, `.../callback/gitlab`, and so on.
+- **An authenticating proxy**, with `proxy`. A load balancer or proxy in front of Atlantis signs people in and passes their identity on. Atlantis verifies it on every request and shows no sign-in page.
+
+Sessions are encrypted cookies, so any replica can serve any request without sticky sessions. Give every replica the same `--web-session-secrets`.
+
+#### Access policy
+
+`access.roles` says who holds each role, and `access.permissions` which role each action needs. The highest matching role wins. People who match no rule are turned away unless you set `default`. Atlantis refuses to start with sign-in enabled and no role rules.
+
+```yaml
+# repos.yaml
+access:
+  sign_in:
+    providers: [...]
   roles:
     admin:
       - group: platform-admins          # identity provider group
@@ -288,130 +318,157 @@ repos:
           - group: data-eng             # data-eng can unlock this repo only
 ```
 
-- Each rule matches exactly one of `group`, `github` (`ORG` or `ORG/TEAM`), `github_user`, `gitlab` (a group path), `gitlab_user`, `gitea` (`ORG` or `ORG/TEAM`), `gitea_user`, `email`, `domain`, or `everyone: true`. A `*_user` rule only matches someone signed in with that VCS, so `octocat` on GitHub and `octocat` on GitLab are different people.
+- Each rule matches exactly one of `group`, `github` (`ORG` or `ORG/TEAM`), `github_user`, `gitlab` (a group path), `gitlab_user`, `gitea` (`ORG` or `ORG/TEAM`), `gitea_user`, `email`, `domain`, or `everyone: true`. A `*_user` rule only matches someone signed in with that VCS, so `octocat` on GitHub and `octocat` on GitLab are different people. Email and domain rules only match emails the provider marks as verified.
 - A `repos` entry can grant extra roles for matching repositories and require a different role to unlock, to stop jobs, or to approve policies there. Viewing, maintenance windows, and the apply lock cover the whole server, so they are set only at the top level. When several entries match, the last one that sets a requirement wins, as with other repo settings.
 - With `enforce_in_pr_comments: true`, an `atlantis unlock` comment is checked against the same unlock rule, matching the commenter's user on the pull request's VCS: `github_user` and GitHub teams, `gitlab_user` and the GitLab groups in [`--gitlab-group-allowlist`](server-configuration.md#gitlab-group-allowlist), or `gitea_user`. Identity provider groups and emails don't apply to comments, and on Bitbucket and Azure DevOps only `everyone: true` rules do.
 - When sign-in is on, the existing UI's pages redirect to the new UI, and its unlock and apply lock actions follow this policy too.
-- The **Access** page in the UI shows the policy in plain words and what you can do in each repository. Atlantis checks the policy at startup and refuses to start with mistakes such as a rule with two attributes or an unknown role.
+- The **Access** page in the UI shows the policy in plain words and what you can do in each repository. Atlantis checks the policy at startup and refuses to start with mistakes such as a rule with two attributes, an unknown role, or a provider setting that doesn't apply to its type.
 
 #### GitHub
 
-Create a GitHub OAuth app, or use a GitHub App with user authorization, with the callback URL. [`--web-github-allowed-orgs`](server-configuration.md#web-github-allowed-orgs) is required, because anyone can create a GitHub account. Organizations become groups named `github:ORG` and teams become `github:ORG/TEAM`; a child team's members also count as members of its parent team. The `github:` prefix keeps a GitHub organization from matching a group of the same name from another provider. GitHub Enterprise uses [`--gh-hostname`](server-configuration.md#gh-hostname).
+Create a GitHub OAuth app, or use a GitHub App with user authorization, with the callback URL. `allowed_orgs` is required, because anyone can create a GitHub account. Organizations become groups named `github:ORG` and teams become `github:ORG/TEAM`; a child team's members also count as members of its parent team. The `github:` prefix keeps a GitHub organization from matching a group of the same name from another provider. GitHub Enterprise uses [`--gh-hostname`](server-configuration.md#gh-hostname).
 
-```sh
-ATLANTIS_WEB_SSO_PROVIDERS=github
-ATLANTIS_WEB_GITHUB_CLIENT_ID=...
-ATLANTIS_WEB_GITHUB_CLIENT_SECRET=...
-ATLANTIS_WEB_GITHUB_ALLOWED_ORGS=acme
-ATLANTIS_WEB_ROLE_ADMINS=github:acme/platform
-ATLANTIS_WEB_ROLE_OPERATORS=github:acme/sre
-ATLANTIS_WEB_ROLE_VIEWERS=github:acme
+```yaml
+access:
+  sign_in:
+    providers:
+      - type: github
+        client_id: Iv1.0123456789abcdef
+        client_secret_env: GITHUB_SIGN_IN_SECRET
+        allowed_orgs: [acme]
+  roles:
+    admin: [{github: acme/platform}]
+    operator: [{github: acme/sre}]
+    viewer: [{github: acme}]
 ```
-
-`--web-sso-providers=github,oidc` shows both buttons, for example for contractors who aren't in your GitHub organization.
 
 If your GitHub organization enforces SAML single sign-on, GitHub asks people to authorize Atlantis for the organization during sign-in. Until they do, GitHub hides the organization's teams from Atlantis and they get no team roles.
 
 #### GitLab
 
-Create a GitLab application, at the instance, group, or user level, with the redirect URI and the `openid`, `profile`, and `email` scopes. [`--web-gitlab-allowed-groups`](server-configuration.md#web-gitlab-allowed-groups) is required, because anyone can create a GitLab account. Groups become `gitlab:FULL/PATH`. GitLab lists every group a person can access, so a member of `acme` is also in `gitlab:acme/platform`. Self-managed GitLab uses [`--gitlab-hostname`](server-configuration.md#gitlab-hostname).
+Create a GitLab application, at the instance, group, or user level, with the redirect URI and the `openid`, `profile`, and `email` scopes. `allowed_groups` is required, because anyone can create a GitLab account; members of subgroups of an allowed group can sign in too. Groups become `gitlab:FULL/PATH`. GitLab lists every group a person can access, so a member of `acme` is also in `gitlab:acme/platform`. Self-managed GitLab uses [`--gitlab-hostname`](server-configuration.md#gitlab-hostname).
 
-```sh
-ATLANTIS_WEB_SSO_PROVIDERS=gitlab
-ATLANTIS_WEB_GITLAB_CLIENT_ID=...
-ATLANTIS_WEB_GITLAB_CLIENT_SECRET=...
-ATLANTIS_WEB_GITLAB_ALLOWED_GROUPS=acme
-ATLANTIS_WEB_ROLE_ADMINS=gitlab:acme/platform
-ATLANTIS_WEB_ROLE_OPERATORS=gitlab:acme/sre
-ATLANTIS_WEB_ROLE_VIEWERS=gitlab:acme
+```yaml
+access:
+  sign_in:
+    providers:
+      - type: gitlab
+        client_id: 0123456789abcdef
+        client_secret_env: GITLAB_SIGN_IN_SECRET
+        allowed_groups: [acme]
+  roles:
+    admin: [{gitlab: acme/platform}]
+    operator: [{gitlab: acme/sre}]
+    viewer: [{gitlab: acme}]
 ```
 
 #### Gitea
 
-Create an OAuth2 application in Gitea or Forgejo with the redirect URI. [`--web-gitea-allowed-orgs`](server-configuration.md#web-gitea-allowed-orgs) is required. Organizations become `gitea:ORG` and teams `gitea:ORG/TEAM`. Atlantis signs in on [`--gitea-base-url`](server-configuration.md#gitea-base-url).
+Create an OAuth2 application in Gitea or Forgejo with the redirect URI. `allowed_orgs` is required. Organizations become `gitea:ORG` and teams `gitea:ORG/TEAM`. Atlantis signs in on [`--gitea-base-url`](server-configuration.md#gitea-base-url).
 
-```sh
-ATLANTIS_WEB_SSO_PROVIDERS=gitea
-ATLANTIS_WEB_GITEA_CLIENT_ID=...
-ATLANTIS_WEB_GITEA_CLIENT_SECRET=...
-ATLANTIS_WEB_GITEA_ALLOWED_ORGS=acme
-ATLANTIS_WEB_ROLE_ADMINS=gitea:acme/owners
-ATLANTIS_WEB_ROLE_VIEWERS=gitea:acme
+```yaml
+access:
+  sign_in:
+    providers:
+      - type: gitea
+        client_id: 0123abcd-0123-abcd-0123-0123456789ab
+        client_secret_env: GITEA_SIGN_IN_SECRET
+        allowed_orgs: [acme]
+  roles:
+    admin: [{gitea: acme/owners}]
+    viewer: [{gitea: acme}]
 ```
 
 #### Microsoft Entra ID
 
 Use Entra ID when your repositories are on Azure DevOps, because Azure DevOps users are Entra ID users. Register an application, add the redirect URI as a web platform, and create a client secret. Define app roles such as `atlantis-admins` and `atlantis-operators`, assign them to groups, and read them from the `roles` claim. App roles avoid Entra ID's group limit: when a user belongs to more than 200 groups, Entra ID leaves groups out of the token, and Atlantis turns the sign-in away with an explanation rather than guessing.
 
-```sh
-ATLANTIS_EXPERIMENTS=web-ui
-ATLANTIS_WEB_SSO_PROVIDERS=oidc
-ATLANTIS_WEB_OIDC_NAME="Microsoft Entra ID"
-ATLANTIS_WEB_OIDC_ISSUER_URL=https://login.microsoftonline.com/TENANT_ID/v2.0
-ATLANTIS_WEB_OIDC_CLIENT_ID=APPLICATION_ID
-ATLANTIS_WEB_OIDC_CLIENT_SECRET=...
-ATLANTIS_WEB_OIDC_GROUPS_CLAIMS=roles
-ATLANTIS_WEB_ROLE_ADMINS=atlantis-admins
-ATLANTIS_WEB_ROLE_OPERATORS=atlantis-operators
-ATLANTIS_WEB_SESSION_SECRETS="$(openssl rand -hex 32)"
+```yaml
+access:
+  sign_in:
+    providers:
+      - type: oidc
+        name: Microsoft Entra ID          # the button label
+        issuer_url: https://login.microsoftonline.com/TENANT_ID/v2.0
+        client_id: APPLICATION_ID
+        client_secret_env: ENTRA_SIGN_IN_SECRET
+        groups_claims: [roles]
+  roles:
+    admin: [{group: atlantis-admins}]
+    operator: [{group: atlantis-operators}]
 ```
 
 Use the tenant-specific issuer; the multi-tenant `common` endpoint is not supported.
 
 #### Google Workspace
 
-Create an OAuth client of type "Web application" with `https://ATLANTIS_URL/ui/auth/callback/google` as an authorized redirect URI. Google has its own provider so it can run next to another OIDC provider such as Entra ID. [`--web-google-allowed-domains`](server-configuration.md#web-google-allowed-domains) is required, because anyone can create a Google account.
+Create an OAuth client of type "Web application" with `https://ATLANTIS_URL/ui/auth/callback/google` as an authorized redirect URI. Google has its own type so it can run next to another OIDC provider such as Entra ID. `allowed_domains` is required, because anyone can create a Google account.
 
-```sh
-ATLANTIS_WEB_SSO_PROVIDERS=oidc,google   # or just google
-ATLANTIS_WEB_GOOGLE_CLIENT_ID=0123-abc.apps.googleusercontent.com
-ATLANTIS_WEB_GOOGLE_CLIENT_SECRET=...
-ATLANTIS_WEB_GOOGLE_ALLOWED_DOMAINS=acme.com
-ATLANTIS_WEB_ROLE_ADMINS=email:platform-lead@acme.com
-ATLANTIS_WEB_ROLE_VIEWERS=domain:acme.com
+```yaml
+access:
+  sign_in:
+    providers:
+      - type: google
+        client_id: 0123-abc.apps.googleusercontent.com
+        client_secret_env: GOOGLE_SIGN_IN_SECRET
+        allowed_domains: [acme.com]
+  roles:
+    admin: [{email: platform-lead@acme.com}]
+    viewer: [{domain: acme.com}]
 ```
 
 Google doesn't include groups in tokens, so grant roles by domain or email. For Google group membership, put [Dex](https://dexidp.io/docs/connectors/google/) in between or use [Identity-Aware Proxy](#google-cloud-identity-aware-proxy).
 
 #### Okta, Keycloak, Auth0, Amazon Cognito, and Dex
 
-Use the provider's issuer URL and configure it to send groups. Okta needs a groups claim on the authorization server and the `groups` scope. Keycloak needs a group membership mapper. Auth0 needs an Action that adds a groups claim, and then [`--web-oidc-groups-claims`](server-configuration.md#web-oidc-groups-claims) set to that claim's name. Cognito puts groups in `cognito:groups`.
+Use `type: oidc` with the provider's `issuer_url`, and configure the provider to send groups. Okta needs a groups claim on the authorization server and the `groups` scope, added with `scopes: [email, profile, groups]`. Keycloak needs a group membership mapper. Auth0 needs an Action that adds a groups claim, and then `groups_claims` set to that claim's name. Cognito puts groups in `cognito:groups`. Atlantis reads groups from the userinfo endpoint when the ID token has none. `allowed_domains` limits sign-in to verified emails in those domains.
 
 #### AWS Application Load Balancer and IAM Identity Center
 
 Configure the load balancer listener to authenticate users, then let Atlantis verify the signed `x-amzn-oidc-data` header. IAM Identity Center supports only SAML for application sign-in, so connect it to an Amazon Cognito user pool as a SAML identity provider and point the load balancer at Cognito. Pass groups from Cognito as a `groups` claim to use group rules.
 
-```sh
-ATLANTIS_WEB_PROXY_AUTH=alb
-ATLANTIS_WEB_PROXY_ALB_ARN=arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/atlantis/abc
-ATLANTIS_WEB_ROLE_VIEWERS=domain:acme.com
+```yaml
+access:
+  sign_in:
+    proxy:
+      type: alb
+      alb_arn: arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/atlantis/abc
+  roles:
+    viewer: [{domain: acme.com}]
 ```
 
 Atlantis checks the signature with the region's public key and that the header was signed by this load balancer. Every listener rule that forwards to Atlantis must authenticate users; otherwise a header issued for another application behind the same load balancer could be replayed. Atlantis trusts the email only when the identity provider sends `email_verified: true`.
 
 #### Google Cloud Identity-Aware Proxy
 
-```sh
-ATLANTIS_WEB_PROXY_AUTH=iap
-ATLANTIS_WEB_PROXY_IAP_AUDIENCE=/projects/PROJECT_NUMBER/global/backendServices/SERVICE_ID
-ATLANTIS_WEB_ROLE_VIEWERS=domain:acme.com
+```yaml
+access:
+  sign_in:
+    proxy:
+      type: iap
+      iap_audience: /projects/PROJECT_NUMBER/global/backendServices/SERVICE_ID
+  roles:
+    viewer: [{domain: acme.com}]
 ```
 
 #### oauth2-proxy, Pomerium, and other proxies
 
 Have the proxy pass the user, email, and groups in headers, and tell Atlantis which networks the proxy connects from. Atlantis checks the connection's address, not `X-Forwarded-For`, so other clients can't set these headers. Anything else that can connect from those networks can also set them, so keep the networks narrow; Atlantis rejects networks broader than `/8` for IPv4 or `/16` for IPv6.
 
-```sh
-ATLANTIS_WEB_PROXY_AUTH=header
-ATLANTIS_WEB_PROXY_USER_HEADER=X-Forwarded-User
-ATLANTIS_WEB_PROXY_EMAIL_HEADER=X-Forwarded-Email
-ATLANTIS_WEB_PROXY_GROUPS_HEADER=X-Forwarded-Groups
-ATLANTIS_WEB_PROXY_TRUSTED_CIDRS=10.0.0.0/8
+```yaml
+access:
+  sign_in:
+    proxy:
+      type: header
+      user_header: X-Forwarded-User
+      email_header: X-Forwarded-Email
+      groups_header: X-Forwarded-Groups
+      trusted_cidrs: [10.0.0.0/8]
 ```
 
 #### Sessions and auditing
 
-A sign-in lasts [`--web-session-lifetime`](server-configuration.md#web-session-lifetime), 4 hours by default. The role is decided at sign-in and kept for the whole session, so someone removed from a group keeps their role until the session ends. Signing out clears the session in that browser only. To end every session at once, for example after removing an administrator, replace all session secrets and restart. Session cookies are `Secure` unless Atlantis runs on `localhost` over plain http.
+A sign-in lasts `access.sign_in.session_lifetime`, 4 hours by default. Groups are read at sign-in and kept for the whole session, so someone removed from a group keeps that group's role until the session ends. Changes to the access policy apply at once. Signing out clears the session in that browser only. To end every session at once, for example after removing an administrator, replace all session secrets and restart. Session cookies are `Secure` unless Atlantis runs on `localhost` over plain http.
 
 Sign-ins, sign-outs, denials, and every action are logged with the user, provider, and role; discarded-plan and policy approval comments on pull requests name the user. When a sign-in fails for a reason the user can't fix, the page shows a short reference that matches the detailed log entry.
 

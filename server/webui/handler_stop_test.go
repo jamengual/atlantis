@@ -170,7 +170,7 @@ func newPolicyServer(t *testing.T, store *fakeStore, actions *fakeActions) (*htt
 	t.Cleanup(srv.Close)
 	public, _ := url.Parse(srv.URL)
 	policy, err := webauth.NewPolicy(webauth.PolicyConfig{
-		Flags: signInRoles,
+		Rules: signInRoles,
 		Repos: []valid.Repo{
 			{IDRegex: regexp.MustCompile(".*")},
 			{ID: "github.com/acme/data-lake", Access: &valid.RepoAccess{Roles: valid.AccessRoles{Operator: []valid.AccessRule{{Group: "data-eng"}}}}},

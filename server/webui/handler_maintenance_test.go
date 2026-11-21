@@ -123,7 +123,7 @@ func newUnlockPolicyServer(t *testing.T, store *fakeStore, actions *fakeActions)
 	t.Cleanup(srv.Close)
 	public, _ := url.Parse(srv.URL)
 	policy, err := webauth.NewPolicy(webauth.PolicyConfig{
-		Flags: signInRoles,
+		Rules: signInRoles,
 		Repos: []valid.Repo{
 			{IDRegex: regexp.MustCompile(`^github\.com/acme/prod-`), Access: &valid.RepoAccess{Permissions: valid.AccessPermissions{Unlock: "admin"}}},
 		},

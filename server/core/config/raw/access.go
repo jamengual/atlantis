@@ -13,6 +13,8 @@ import (
 // Access is the raw schema of the web UI access policy:
 //
 //	access:
+//	  sign_in:            # see SignIn
+//	    providers: [...]
 //	  roles:
 //	    admin:
 //	      - group: platform-admins
@@ -35,6 +37,8 @@ type Access struct {
 	Default             string             `yaml:"default,omitempty" json:"default,omitempty"`
 	Permissions         *AccessPermissions `yaml:"permissions,omitempty" json:"permissions,omitempty"`
 	EnforceInPRComments bool               `yaml:"enforce_in_pr_comments,omitempty" json:"enforce_in_pr_comments,omitempty"`
+	// SignIn is how people sign in to the web UI.
+	SignIn *SignIn `yaml:"sign_in,omitempty" json:"sign_in,omitempty"`
 }
 
 // RepoAccess is the per-repo access policy under a repos entry. It grants
@@ -125,6 +129,11 @@ func (r AccessRoles) validate(where string) error {
 
 // Validate checks the global access policy.
 func (a Access) Validate() error {
+	if a.SignIn != nil {
+		if err := a.SignIn.Validate(); err != nil {
+			return err
+		}
+	}
 	if err := a.Roles.validate("access"); err != nil {
 		return err
 	}
@@ -219,6 +228,7 @@ func (a *Access) ToValid() *valid.Access {
 		Default:             strings.ToLower(a.Default),
 		Permissions:         a.Permissions.toValid(),
 		EnforceInPRComments: a.EnforceInPRComments,
+		SignIn:              a.SignIn.ToValid(),
 	}
 }
 

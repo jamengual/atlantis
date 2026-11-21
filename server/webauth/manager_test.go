@@ -453,7 +453,7 @@ func TestGitHub_SessionKeepsDirectOwnerTeams(t *testing.T) {
 	a := newApp(t, "", func(u *url.URL) webauth.Config {
 		cfg := githubConfig(gh, []string{"acme"})(u)
 		policy, err := webauth.NewPolicy(webauth.PolicyConfig{
-			Flags:            webauth.RoleMapper{Operators: []string{"github:acme/sec"}},
+			Rules:            webauth.RoleMapper{Operators: []string{"github:acme/sec"}},
 			PolicyOwnerTeams: []string{"sec", "finops"},
 		})
 		Ok(t, err)

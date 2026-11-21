@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/runatlantis/atlantis/server/core/config"
 	"github.com/runatlantis/atlantis/server/core/config/valid"
@@ -108,6 +109,73 @@ func TestParseGlobalCfg_AccessErrors(t *testing.T) {
 		"per-repo approve none":        {"repos:\n  - id: /.*/\n    access:\n      permissions:\n        approve_policies: none\n", "permissions.approve_policies: an action can't require the none role"},
 		"per-repo approve unknown":     {"repos:\n  - id: /.*/\n    access:\n      permissions:\n        approve_policies: boss\n", "permissions.approve_policies: unknown role"},
 		"unknown key":                  {"access:\n  roles:\n    admin:\n      - team: x\n", "team"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := parseRepoConfig(t, tc.yaml)
+			ErrContains(t, tc.want, err)
+		})
+	}
+}
+
+func TestParseGlobalCfg_SignIn(t *testing.T) {
+	cfg, err := parseRepoConfig(t, `
+access:
+  sign_in:
+    session_lifetime: 8h
+    providers:
+      - type: GitLab
+        client_id: " gl-app "
+        client_secret_env: GITLAB_SIGN_IN_SECRET
+        allowed_groups: [acme, " acme/platform "]
+      - type: oidc
+        name: Microsoft Entra ID
+        issuer_url: https://login.microsoftonline.com/t/v2.0
+        client_id: app
+        client_secret_env: ENTRA_SECRET
+        groups_claims: [roles]
+  roles:
+    viewer:
+      - gitlab: acme
+`)
+	Ok(t, err)
+	Equals(t, &valid.SignIn{
+		SessionLifetime: 8 * time.Hour,
+		Providers: []valid.SignInProvider{
+			{Type: "gitlab", ClientID: "gl-app", ClientSecretEnv: "GITLAB_SIGN_IN_SECRET", AllowedGroups: []string{"acme", "acme/platform"}},
+			{Type: "oidc", Name: "Microsoft Entra ID", IssuerURL: "https://login.microsoftonline.com/t/v2.0", ClientID: "app", ClientSecretEnv: "ENTRA_SECRET", GroupsClaims: []string{"roles"}},
+		},
+	}, cfg.Access.SignIn)
+
+	cfg, err = parseRepoConfig(t, "access:\n  sign_in:\n    proxy:\n      type: ALB\n      alb_arn: arn:x\n  default: viewer\n")
+	Ok(t, err)
+	Equals(t, &valid.SignInProxy{Type: "alb", ALBArn: "arn:x"}, cfg.Access.SignIn.Proxy)
+}
+
+func TestParseGlobalCfg_SignInErrors(t *testing.T) {
+	const p = "access:\n  sign_in:\n    providers:\n      - "
+	cases := map[string]struct {
+		yaml string
+		want string
+	}{
+		"empty":               {"access:\n  sign_in: {}\n", "access.sign_in: add providers or a proxy"},
+		"both modes":          {"access:\n  sign_in:\n    proxy: {type: iap}\n    providers:\n      - {type: google, client_id: x, client_secret_env: S, allowed_domains: [a.com]}\n", "providers and proxy can't be used together"},
+		"unknown provider":    {p + "{type: saml, client_id: x, client_secret_env: S}\n", `access.sign_in.providers[0].type: unknown provider "saml"; use github, gitlab, gitea, oidc, google`},
+		"no client id":        {p + "{type: github, client_secret_env: S, allowed_orgs: [acme]}\n", "github sign-in needs client_id"},
+		"no secret env":       {p + "{type: github, client_id: x, allowed_orgs: [acme]}\n", "needs client_secret_env"},
+		"secret env not name": {p + "{type: github, client_id: x, client_secret_env: 'hunter2!', allowed_orgs: [acme]}\n", "needs client_secret_env"},
+		"inline secret":       {p + "{type: github, client_id: x, client_secret: hunter2, allowed_orgs: [acme]}\n", "client_secret"},
+		"github no orgs":      {p + "{type: github, client_id: x, client_secret_env: S}\n", "github sign-in needs allowed_orgs"},
+		"gitea no orgs":       {p + "{type: gitea, client_id: x, client_secret_env: S}\n", "gitea sign-in needs allowed_orgs"},
+		"gitlab no groups":    {p + "{type: gitlab, client_id: x, client_secret_env: S}\n", "gitlab sign-in needs allowed_groups"},
+		"google no domains":   {p + "{type: google, client_id: x, client_secret_env: S}\n", "google sign-in needs allowed_domains"},
+		"oidc no issuer":      {p + "{type: oidc, client_id: x, client_secret_env: S}\n", "oidc sign-in needs issuer_url"},
+		"field for another":   {p + "{type: gitlab, client_id: x, client_secret_env: S, allowed_groups: [a], allowed_orgs: [a]}\n", "access.sign_in.providers[0].allowed_orgs: doesn't apply to gitlab sign-in"},
+		"issuer on github":    {p + "{type: github, client_id: x, client_secret_env: S, allowed_orgs: [a], issuer_url: https://x}\n", "issuer_url: doesn't apply to github sign-in"},
+		"duplicate type":      {p + "{type: google, client_id: x, client_secret_env: S, allowed_domains: [a.com]}\n      - {type: Google, client_id: y, client_secret_env: T, allowed_domains: [b.com]}\n", "providers[1]: there is already a google provider"},
+		"unknown proxy":       {"access:\n  sign_in:\n    proxy: {type: saml}\n", `access.sign_in.proxy.type: unknown proxy type "saml"`},
+		"bad lifetime":        {"access:\n  sign_in:\n    session_lifetime: forever\n    proxy: {type: iap}\n", "session_lifetime: \"forever\" is not a positive duration"},
+		"negative lifetime":   {"access:\n  sign_in:\n    session_lifetime: -1h\n    proxy: {type: iap}\n", "not a positive duration"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

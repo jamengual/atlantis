@@ -12,6 +12,8 @@ type Access struct {
 	// EnforceInPRComments applies the unlock permission to "atlantis unlock"
 	// comments, matched against the commenter's VCS identity.
 	EnforceInPRComments bool
+	// SignIn is nil when web UI sign-in isn't configured.
+	SignIn *SignIn
 }
 
 // RepoAccess adjusts the policy for matching repositories. Its roles are
