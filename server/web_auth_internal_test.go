@@ -21,13 +21,16 @@ const testSessionSecret = "0123456789abcdef0123456789abcdef"
 
 // signInCfg is a server-side repo config with sign-in and one role rule.
 func signInCfg(signIn *valid.SignIn) valid.GlobalCfg {
+	if signIn.SessionSecretsEnv == "" {
+		signIn.SessionSecretsEnv = "SESSION_SECRETS"
+	}
 	return valid.GlobalCfg{Access: &valid.Access{
 		SignIn: signIn,
 		Roles:  valid.AccessRoles{Viewer: []valid.AccessRule{{Everyone: true}}},
 	}}
 }
 
-var testEnv = map[string]string{"OIDC_SECRET": "oidc-secret", "GH_SECRET": "gh-secret", "GL_SECRET": "gl-secret", "GT_SECRET": "gt-secret", "G_SECRET": "g-secret"}
+var testEnv = map[string]string{"SESSION_SECRETS": " " + testSessionSecret + ", " + testSessionSecret + "x", "SHORT_SECRETS": "short", "OIDC_SECRET": "oidc-secret", "GH_SECRET": "gh-secret", "GL_SECRET": "gl-secret", "GT_SECRET": "gt-secret", "G_SECRET": "g-secret"}
 
 func oidcProvider() valid.SignInProvider {
 	return valid.SignInProvider{Type: "oidc", IssuerURL: "https://login.example.com", ClientID: "id", ClientSecretEnv: "OIDC_SECRET"}
@@ -35,7 +38,7 @@ func oidcProvider() valid.SignInProvider {
 
 func TestNewWebAuth(t *testing.T) {
 	public, _ := url.Parse("https://atlantis.example.com")
-	server := UserConfig{WebSessionSecrets: []string{testSessionSecret}, GitlabHostname: "gitlab.acme.internal", GiteaBaseURL: "https://gitea.acme.internal"}
+	server := UserConfig{GitlabHostname: "gitlab.acme.internal", GiteaBaseURL: "https://gitea.acme.internal"}
 
 	m, err := webAuthFor(server, valid.GlobalCfg{}, public, t)
 	Ok(t, err)
@@ -75,8 +78,8 @@ func TestNewWebAuth(t *testing.T) {
 		{"no roles", nil, valid.GlobalCfg{Access: &valid.Access{SignIn: &valid.SignIn{Providers: []valid.SignInProvider{oidcProvider()}}}}, "no role rules"},
 		{"secret env unset", nil, signInCfg(&valid.SignIn{Providers: []valid.SignInProvider{{Type: "github", ClientID: "gh", ClientSecretEnv: "UNSET_SECRET", AllowedOrgs: []string{"acme"}}}}),
 			"access.sign_in.providers[0] (github): the environment variable UNSET_SECRET named by client_secret_env is not set"},
-		{"no session secrets", func(c *UserConfig) { c.WebSessionSecrets = nil }, signInCfg(&valid.SignIn{Providers: []valid.SignInProvider{oidcProvider()}}), "session secret"},
-		{"short session secret", func(c *UserConfig) { c.WebSessionSecrets = []string{"short"} }, signInCfg(&valid.SignIn{Providers: []valid.SignInProvider{oidcProvider()}}), "at least 32"},
+		{"no session secrets", nil, signInCfg(&valid.SignIn{SessionSecretsEnv: "UNSET_SECRETS", Providers: []valid.SignInProvider{oidcProvider()}}), "the environment variable UNSET_SECRETS named by session_secrets_env is not set"},
+		{"short session secret", nil, signInCfg(&valid.SignIn{SessionSecretsEnv: "SHORT_SECRETS", Providers: []valid.SignInProvider{oidcProvider()}}), "at least 32"},
 		{"alb without arn", nil, signInCfg(&valid.SignIn{Proxy: &valid.SignInProxy{Type: "alb"}}), "load balancer ARN"},
 		{"iap without audience", nil, signInCfg(&valid.SignIn{Proxy: &valid.SignInProxy{Type: "iap"}}), "audience"},
 		{"header without cidrs", nil, signInCfg(&valid.SignIn{Proxy: &valid.SignInProxy{Type: "header", UserHeader: "X-User"}}), "trusted proxy networks"},

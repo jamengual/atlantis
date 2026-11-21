@@ -8,6 +8,9 @@ import "time"
 // SignIn is how people sign in to the web UI: providers with sign-in pages,
 // or an authenticating proxy, never both.
 type SignIn struct {
+	// SessionSecretsEnv names the environment variable with the session
+	// secrets, separated by commas.
+	SessionSecretsEnv string
 	// SessionLifetime is zero for the default.
 	SessionLifetime time.Duration
 	Providers       []SignInProvider

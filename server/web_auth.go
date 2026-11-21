@@ -73,9 +73,18 @@ func newWebAuthManager(c UserConfig, publicURL *url.URL, logger logging.SimpleLo
 	if signIn.SessionLifetime > 0 {
 		lifetime = signIn.SessionLifetime
 	}
+	var secrets []string
+	for s := range strings.SplitSeq(getenv(signIn.SessionSecretsEnv), ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			secrets = append(secrets, s)
+		}
+	}
+	if len(secrets) == 0 {
+		return nil, fmt.Errorf("access.sign_in: the environment variable %s named by session_secrets_env is not set", signIn.SessionSecretsEnv)
+	}
 	cfg := webauth.Config{
 		PublicURL:       publicURL,
-		SessionSecrets:  c.WebSessionSecrets,
+		SessionSecrets:  secrets,
 		SessionLifetime: lifetime,
 		Policy:          policy,
 		Logger:          logger,

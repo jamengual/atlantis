@@ -236,12 +236,13 @@ Web UI sign-in replaces basic auth for the pages at `/ui` with your VCS or ident
 
 Have people sign in with the VCS they already use for pull requests: [GitHub](#github), [GitLab](#gitlab), or [Gitea](#gitea). They're usually signed in to it already, often through your company's single sign-on, so signing in to Atlantis takes one click. Roles then follow the organizations, teams, and groups you already manage there, and the same rules can check `atlantis unlock` comments. Use [Microsoft Entra ID](#microsoft-entra-id) for Azure DevOps, whose users are Entra ID users, and [Google Workspace](#google-workspace) or [another OIDC provider](#okta-keycloak-auth0-amazon-cognito-and-dex) when people don't share a VCS.
 
-Sign-in and access are both set up in the `access` section of the [server-side repo config](server-side-repo-config.md), so a change to who can sign in or what they can do is reviewed like any other change to `repos.yaml`. The only server setting is [`--web-session-secrets`](server-configuration.md#web-session-secrets).
+Sign-in and access are both set up in the `access` section of the [server-side repo config](server-side-repo-config.md), so a change to who can sign in or what they can do is reviewed like any other change to `repos.yaml`. There are no server flags for sign-in.
 
 ```yaml
 # repos.yaml
 access:
   sign_in:
+    session_secrets_env: ATLANTIS_SESSION_SECRETS   # see Sessions below
     session_lifetime: 4h                  # optional; the default
     providers:
       - type: github
@@ -260,18 +261,18 @@ access:
 ```sh
 ATLANTIS_EXPERIMENTS=web-ui
 ATLANTIS_REPO_CONFIG=/etc/atlantis/repos.yaml
-ATLANTIS_WEB_SESSION_SECRETS="$(openssl rand -hex 32)"
+ATLANTIS_SESSION_SECRETS="$(openssl rand -hex 32)"
 GITHUB_SIGN_IN_SECRET=...
 ```
 
-Secrets are never written in `repos.yaml`. Each provider's `client_secret_env` names the environment variable that holds its client secret, and Atlantis refuses to start if that variable is empty. Use one name per provider, such as one set from a Kubernetes secret.
+Secrets are never written in `repos.yaml`. `session_secrets_env` names the environment variable with the secrets that encrypt session cookies, and each provider's `client_secret_env` names the one with its client secret. Atlantis refuses to start if any of them is empty. Use one name per provider, such as one set from a Kubernetes secret.
 
 There are two ways to sign in, and you choose one:
 
 - **Sign-in pages**, with `providers`. Atlantis redirects to GitHub, GitLab, Gitea, or an OpenID Connect provider, using the authorization code flow with PKCE. With more than one provider, the sign-in page shows a button for each, for example GitHub for staff and Entra ID for contractors outside your GitHub organization. Each `type` can be used once. Register `https://ATLANTIS_URL/ui/auth/callback/TYPE` as the redirect URI, using your [`--atlantis-url`](server-configuration.md#atlantis-url): `.../callback/github`, `.../callback/gitlab`, and so on.
 - **An authenticating proxy**, with `proxy`. A load balancer or proxy in front of Atlantis signs people in and passes their identity on. Atlantis verifies it on every request and shows no sign-in page.
 
-Sessions are encrypted cookies, so any replica can serve any request without sticky sessions. Give every replica the same `--web-session-secrets`.
+Sessions are cookies encrypted with the session secrets, so any replica can serve any request without sticky sessions. Give every replica the same secrets: separated by commas, each at least 32 characters. The first encrypts and all decrypt, so to rotate, put a new secret in front and remove the old one after the session lifetime has passed.
 
 #### Access policy
 

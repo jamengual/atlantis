@@ -1775,16 +1775,6 @@ ATLANTIS_WEB_PASSWORD="atlantis"
 
 Password used for Basic Authentication on the Atlantis web service. Defaults to `atlantis`.
 
-### `--web-session-secrets` <Badge text="Experimental" type="warning"/>
-
-```bash
-atlantis server --web-session-secrets="$(openssl rand -hex 32)"
-# or
-ATLANTIS_WEB_SESSION_SECRETS="$(openssl rand -hex 32)"
-```
-
-Secrets that encrypt web UI session cookies, separated by commas. Each must be at least 32 characters. The first encrypts and all decrypt, so to rotate, add the new secret in front and remove the old one after the session lifetime has passed. Every replica needs the same secrets. Set it with the environment variable so it doesn't appear in process listings. See [web UI sign-in](experiments.md#web-ui-sign-in).
-
 ### `--web-username`
 
 ```bash

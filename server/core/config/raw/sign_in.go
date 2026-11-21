@@ -17,6 +17,7 @@ import (
 //
 //	access:
 //	  sign_in:
+//	    session_secrets_env: ATLANTIS_SESSION_SECRETS
 //	    session_lifetime: 4h
 //	    providers:
 //	      - type: github
@@ -41,9 +42,12 @@ import (
 // Secrets are never written here: client_secret_env names the environment
 // variable that holds them.
 type SignIn struct {
-	SessionLifetime string           `yaml:"session_lifetime,omitempty" json:"session_lifetime,omitempty"`
-	Providers       []SignInProvider `yaml:"providers,omitempty" json:"providers,omitempty"`
-	Proxy           *SignInProxy     `yaml:"proxy,omitempty" json:"proxy,omitempty"`
+	// SessionSecretsEnv names the environment variable with the session
+	// secrets, separated by commas.
+	SessionSecretsEnv string           `yaml:"session_secrets_env" json:"session_secrets_env"`
+	SessionLifetime   string           `yaml:"session_lifetime,omitempty" json:"session_lifetime,omitempty"`
+	Providers         []SignInProvider `yaml:"providers,omitempty" json:"providers,omitempty"`
+	Proxy             *SignInProxy     `yaml:"proxy,omitempty" json:"proxy,omitempty"`
 }
 
 // SignInProvider is one sign-in button. Which fields apply depends on Type.
@@ -154,6 +158,9 @@ func (p SignInProxy) validate(where string) error {
 // Validate checks the sign-in section.
 func (s SignIn) Validate() error {
 	const where = "access.sign_in"
+	if !envVarName.MatchString(s.SessionSecretsEnv) {
+		return fmt.Errorf("%s: needs session_secrets_env, the name of the environment variable that holds the secrets that encrypt session cookies, such as ATLANTIS_SESSION_SECRETS", where)
+	}
 	if s.SessionLifetime != "" {
 		if d, err := time.ParseDuration(s.SessionLifetime); err != nil || d <= 0 {
 			return fmt.Errorf("%s.session_lifetime: %q is not a positive duration such as 8h", where, s.SessionLifetime)
@@ -198,7 +205,7 @@ func (s *SignIn) ToValid() *valid.SignIn {
 	if s == nil {
 		return nil
 	}
-	out := &valid.SignIn{}
+	out := &valid.SignIn{SessionSecretsEnv: s.SessionSecretsEnv}
 	if s.SessionLifetime != "" {
 		out.SessionLifetime, _ = time.ParseDuration(s.SessionLifetime)
 	}

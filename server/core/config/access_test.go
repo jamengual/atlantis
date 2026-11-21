@@ -122,6 +122,7 @@ func TestParseGlobalCfg_SignIn(t *testing.T) {
 	cfg, err := parseRepoConfig(t, `
 access:
   sign_in:
+    session_secrets_env: ATLANTIS_SESSION_SECRETS
     session_lifetime: 8h
     providers:
       - type: GitLab
@@ -140,26 +141,28 @@ access:
 `)
 	Ok(t, err)
 	Equals(t, &valid.SignIn{
-		SessionLifetime: 8 * time.Hour,
+		SessionSecretsEnv: "ATLANTIS_SESSION_SECRETS",
+		SessionLifetime:   8 * time.Hour,
 		Providers: []valid.SignInProvider{
 			{Type: "gitlab", ClientID: "gl-app", ClientSecretEnv: "GITLAB_SIGN_IN_SECRET", AllowedGroups: []string{"acme", "acme/platform"}},
 			{Type: "oidc", Name: "Microsoft Entra ID", IssuerURL: "https://login.microsoftonline.com/t/v2.0", ClientID: "app", ClientSecretEnv: "ENTRA_SECRET", GroupsClaims: []string{"roles"}},
 		},
 	}, cfg.Access.SignIn)
 
-	cfg, err = parseRepoConfig(t, "access:\n  sign_in:\n    proxy:\n      type: ALB\n      alb_arn: arn:x\n  default: viewer\n")
+	cfg, err = parseRepoConfig(t, "access:\n  sign_in:\n    session_secrets_env: SS\n    proxy:\n      type: ALB\n      alb_arn: arn:x\n  default: viewer\n")
 	Ok(t, err)
 	Equals(t, &valid.SignInProxy{Type: "alb", ALBArn: "arn:x"}, cfg.Access.SignIn.Proxy)
 }
 
 func TestParseGlobalCfg_SignInErrors(t *testing.T) {
-	const p = "access:\n  sign_in:\n    providers:\n      - "
+	const p = "access:\n  sign_in:\n    session_secrets_env: SS\n    providers:\n      - "
 	cases := map[string]struct {
 		yaml string
 		want string
 	}{
-		"empty":               {"access:\n  sign_in: {}\n", "access.sign_in: add providers or a proxy"},
-		"both modes":          {"access:\n  sign_in:\n    proxy: {type: iap}\n    providers:\n      - {type: google, client_id: x, client_secret_env: S, allowed_domains: [a.com]}\n", "providers and proxy can't be used together"},
+		"empty":               {"access:\n  sign_in: {session_secrets_env: SS}\n", "access.sign_in: add providers or a proxy"},
+		"no session secrets":  {"access:\n  sign_in:\n    proxy: {type: iap}\n", "access.sign_in: needs session_secrets_env"},
+		"both modes":          {"access:\n  sign_in:\n    session_secrets_env: SS\n    proxy: {type: iap}\n    providers:\n      - {type: google, client_id: x, client_secret_env: S, allowed_domains: [a.com]}\n", "providers and proxy can't be used together"},
 		"unknown provider":    {p + "{type: saml, client_id: x, client_secret_env: S}\n", `access.sign_in.providers[0].type: unknown provider "saml"; use github, gitlab, gitea, oidc, google`},
 		"no client id":        {p + "{type: github, client_secret_env: S, allowed_orgs: [acme]}\n", "github sign-in needs client_id"},
 		"no secret env":       {p + "{type: github, client_id: x, allowed_orgs: [acme]}\n", "needs client_secret_env"},
@@ -173,9 +176,9 @@ func TestParseGlobalCfg_SignInErrors(t *testing.T) {
 		"field for another":   {p + "{type: gitlab, client_id: x, client_secret_env: S, allowed_groups: [a], allowed_orgs: [a]}\n", "access.sign_in.providers[0].allowed_orgs: doesn't apply to gitlab sign-in"},
 		"issuer on github":    {p + "{type: github, client_id: x, client_secret_env: S, allowed_orgs: [a], issuer_url: https://x}\n", "issuer_url: doesn't apply to github sign-in"},
 		"duplicate type":      {p + "{type: google, client_id: x, client_secret_env: S, allowed_domains: [a.com]}\n      - {type: Google, client_id: y, client_secret_env: T, allowed_domains: [b.com]}\n", "providers[1]: there is already a google provider"},
-		"unknown proxy":       {"access:\n  sign_in:\n    proxy: {type: saml}\n", `access.sign_in.proxy.type: unknown proxy type "saml"`},
-		"bad lifetime":        {"access:\n  sign_in:\n    session_lifetime: forever\n    proxy: {type: iap}\n", "session_lifetime: \"forever\" is not a positive duration"},
-		"negative lifetime":   {"access:\n  sign_in:\n    session_lifetime: -1h\n    proxy: {type: iap}\n", "not a positive duration"},
+		"unknown proxy":       {"access:\n  sign_in:\n    session_secrets_env: SS\n    proxy: {type: saml}\n", `access.sign_in.proxy.type: unknown proxy type "saml"`},
+		"bad lifetime":        {"access:\n  sign_in:\n    session_secrets_env: SS\n    session_lifetime: forever\n    proxy: {type: iap}\n", "session_lifetime: \"forever\" is not a positive duration"},
+		"negative lifetime":   {"access:\n  sign_in:\n    session_secrets_env: SS\n    session_lifetime: -1h\n    proxy: {type: iap}\n", "not a positive duration"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -165,7 +165,6 @@ const (
 	WebBasicAuthFlag                 = "web-basic-auth"
 	WebUsernameFlag                  = "web-username"
 	WebPasswordFlag                  = "web-password"
-	WebSessionSecretsFlag            = "web-session-secrets" // #nosec G101 -- flag name, not a credential
 	EnableDriftDetectionFlag         = "enable-drift-detection"
 	EnableDriftRemediationFlag       = "enable-drift-remediation"
 	WebsocketCheckOrigin             = "websocket-check-origin"
@@ -211,9 +210,6 @@ const (
 )
 
 var stringSliceFlags = map[string]stringSliceFlag{
-	WebSessionSecretsFlag: {
-		description: "Experimental. Secrets that encrypt web UI session cookies when access.sign_in is set in the server-side repo config, separated by commas, each at least 32 random characters. The first encrypts; all decrypt, so add a new secret in front to rotate. Every replica needs the same secrets. Set with ATLANTIS_WEB_SESSION_SECRETS.",
-	},
 	ExperimentsFlag: {
 		description: "Server experiment permissions, separated by commas. Required for experimental feature settings and routes; activation settings still apply. See " + server.ExperimentsDocumentationURL + ".",
 	},

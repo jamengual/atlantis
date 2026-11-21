@@ -159,7 +159,6 @@ var testFlags = map[string]any{
 	IgnoreVCSStatusNames:             "",
 	WebhookHttpHeaders:               `{"Authorization":"Bearer some-token","X-Custom-Header":["value1","value2"]}`,
 	WebBasicAuthFlag:                 false,
-	WebSessionSecretsFlag:            []string{"0123456789abcdef0123456789abcdef"},
 	WebPasswordFlag:                  "atlantis",
 	WebUsernameFlag:                  "atlantis",
 	WebsocketCheckOrigin:             false,

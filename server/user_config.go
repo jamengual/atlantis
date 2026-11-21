@@ -144,12 +144,11 @@ type UserConfig struct {
 	WebhookHttpHeaders         string          `mapstructure:"webhook-http-headers"`
 	WebBasicAuth               bool            `mapstructure:"web-basic-auth"`
 	// Web UI sign-in. These apply to the web-ui experiment's pages at /ui.
-	WebSessionSecrets    []string `mapstructure:"web-session-secrets"`
-	WebUsername          string   `mapstructure:"web-username"`
-	WebPassword          string   `mapstructure:"web-password"`
-	WriteGitCreds        bool     `mapstructure:"write-git-creds"`
-	WebsocketCheckOrigin bool     `mapstructure:"websocket-check-origin"`
-	UseTFPluginCache     bool     `mapstructure:"use-tf-plugin-cache"`
+	WebUsername          string `mapstructure:"web-username"`
+	WebPassword          string `mapstructure:"web-password"`
+	WriteGitCreds        bool   `mapstructure:"write-git-creds"`
+	WebsocketCheckOrigin bool   `mapstructure:"websocket-check-origin"`
+	UseTFPluginCache     bool   `mapstructure:"use-tf-plugin-cache"`
 
 	// Experiments grants server-only permissions for experimental settings and routes.
 	Experiments []string `mapstructure:"experiments"`
