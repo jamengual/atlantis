@@ -160,6 +160,12 @@ type UserConfig struct {
 	WebGoogleClientID       string   `mapstructure:"web-google-client-id"`
 	WebGoogleClientSecret   string   `mapstructure:"web-google-client-secret"`
 	WebGoogleAllowedDomains []string `mapstructure:"web-google-allowed-domains"`
+	WebGitLabClientID       string   `mapstructure:"web-gitlab-client-id"`
+	WebGitLabClientSecret   string   `mapstructure:"web-gitlab-client-secret"`
+	WebGitLabAllowedGroups  []string `mapstructure:"web-gitlab-allowed-groups"`
+	WebGiteaClientID        string   `mapstructure:"web-gitea-client-id"`
+	WebGiteaClientSecret    string   `mapstructure:"web-gitea-client-secret"`
+	WebGiteaAllowedOrgs     []string `mapstructure:"web-gitea-allowed-orgs"`
 	WebProxyAuth            string   `mapstructure:"web-proxy-auth"`
 	WebProxyALBArn          string   `mapstructure:"web-proxy-alb-arn"`
 	WebProxyIAPAudience     string   `mapstructure:"web-proxy-iap-audience"`

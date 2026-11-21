@@ -47,6 +47,17 @@ type OIDCConfig struct {
 	// AllowedDomains, when set, admits only users whose verified email, or
 	// Google Workspace "hd" claim, is in one of these domains.
 	AllowedDomains []string
+
+	// GroupPrefix is put in front of every group, such as "gitlab:".
+	GroupPrefix string
+	// GroupMap, when set, rewrites each group before the prefix is added.
+	GroupMap func(string) string
+	// LoginClaims are the claims read as the VCS username, in order. They
+	// are set for VCS providers, whose ID is then the login's kind.
+	LoginClaims []string
+	// AllowedGroups, when set, admits only members of these groups or their
+	// subgroups. Values don't include GroupPrefix.
+	AllowedGroups []string
 }
 
 // OIDCProvider signs users in with OpenID Connect. Discovery runs on the
@@ -189,7 +200,31 @@ func (p *OIDCProvider) Exchange(ctx context.Context, code, verifier, nonce, redi
 	if err := checkDomain(id, claims, p.cfg.AllowedDomains); err != nil {
 		return Identity{}, err
 	}
+	p.applyVCS(&id, claims)
+	if len(p.cfg.AllowedGroups) > 0 && !inAllowedGroups(id.Groups, p.cfg.GroupPrefix, p.cfg.AllowedGroups) {
+		return Identity{}, userError("only members of %s can sign in to Atlantis with %s", strings.Join(p.cfg.AllowedGroups, ", "), p.cfg.Name)
+	}
 	return id, nil
+}
+
+// applyVCS prefixes the groups and reads the login of a VCS provider.
+func (p *OIDCProvider) applyVCS(id *Identity, claims map[string]any) {
+	if p.cfg.GroupPrefix != "" || p.cfg.GroupMap != nil {
+		groups := make([]string, 0, len(id.Groups))
+		for _, g := range id.Groups {
+			if p.cfg.GroupMap != nil {
+				g = p.cfg.GroupMap(g)
+			}
+			groups = append(groups, p.cfg.GroupPrefix+g)
+		}
+		id.Groups = groups
+	}
+	for _, key := range p.cfg.LoginClaims {
+		if v, _ := claims[key].(string); v != "" {
+			id.Login, id.LoginKind = v, p.cfg.ID
+			return
+		}
+	}
 }
 
 func identityFromClaims(subject string, claims map[string]any, groupsClaims []string) Identity {

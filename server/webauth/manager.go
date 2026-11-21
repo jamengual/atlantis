@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"net/url"
 	"path"
-	"slices"
 	"strings"
 	"time"
 
@@ -181,14 +180,15 @@ func (m *Manager) Authenticate(r *http.Request) *Principal {
 }
 
 func (m *Manager) principal(id Identity, provider string) *Principal {
-	if provider != "github" {
-		// Only the GitHub provider may report github: groups.
-		id.Groups = slices.DeleteFunc(slices.Clone(id.Groups), func(g string) bool {
-			return strings.HasPrefix(strings.ToLower(g), GitHubGroupPrefix)
-		})
+	// Only a VCS provider may report groups and logins of its own kind.
+	id.Groups = withoutForeignVCSGroups(id.Groups, provider)
+	if provider != VCSGitHub {
 		id.GitHubTeams = nil
 	}
-	p := &Principal{Subject: id.Subject, Name: id.Name, Provider: provider, GitHubLogin: id.Login}
+	if id.LoginKind != provider {
+		id.Login, id.LoginKind = "", ""
+	}
+	p := &Principal{Subject: id.Subject, Name: id.Name, Provider: provider, Login: id.Login, LoginKind: id.LoginKind}
 	if id.EmailVerified {
 		p.Email = id.Email
 	}

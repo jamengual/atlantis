@@ -73,7 +73,7 @@ func (a Action) Describe() string {
 
 // rule is one parsed role rule.
 type rule struct {
-	kind  string // group, github_user, email, domain, everyone
+	kind  string // group, github_user, gitlab_user, gitea_user, email, domain, everyone
 	value string
 }
 
@@ -83,12 +83,12 @@ func (r rule) String() string {
 	case "everyone":
 		return "everyone who signs in"
 	case "group":
-		if v, ok := strings.CutPrefix(r.value, GitHubGroupPrefix); ok {
-			return "GitHub " + v
+		if kind, v, ok := strings.Cut(r.value, ":"); ok && slices.Contains(vcsKinds, strings.ToLower(kind)) {
+			return vcsName(strings.ToLower(kind)) + " " + v
 		}
 		return "group " + r.value
-	case "github_user":
-		return "GitHub user " + r.value
+	case "github_user", "gitlab_user", "gitea_user":
+		return vcsName(strings.TrimSuffix(r.kind, "_user")) + " user " + r.value
 	case "email":
 		return r.value
 	case "domain":
@@ -111,13 +111,14 @@ func (r roleRules) all() []rule {
 
 // Subject is who a rule is matched against.
 type Subject struct {
-	// Groups from the identity provider; GitHub groups carry the github:
-	// prefix.
+	// Groups from the identity provider. VCS groups carry their VCS prefix,
+	// such as github: or gitlab:.
 	Groups []string
 	// Email is used only when verified.
 	Email string
-	// GitHubLogin is the GitHub username, when known.
-	GitHubLogin string
+	// Login is the VCS username, when known, and LoginKind its VCS.
+	Login     string
+	LoginKind string
 }
 
 func (r rule) matches(s Subject) bool {
@@ -126,8 +127,8 @@ func (r rule) matches(s Subject) bool {
 		return true
 	case "group":
 		return slices.ContainsFunc(s.Groups, func(g string) bool { return strings.EqualFold(g, r.value) })
-	case "github_user":
-		return s.GitHubLogin != "" && strings.EqualFold(s.GitHubLogin, r.value)
+	case "github_user", "gitlab_user", "gitea_user":
+		return s.Login != "" && s.LoginKind+"_user" == r.kind && strings.EqualFold(s.Login, r.value)
 	case "email":
 		return s.Email != "" && strings.EqualFold(s.Email, r.value)
 	case "domain":
@@ -212,6 +213,14 @@ func fromAccessRules(in []valid.AccessRule) []rule {
 			out = append(out, rule{kind: "group", value: GitHubGroupPrefix + r.GitHub})
 		case r.GitHubUser != "":
 			out = append(out, rule{kind: "github_user", value: r.GitHubUser})
+		case r.GitLab != "":
+			out = append(out, rule{kind: "group", value: GitLabGroupPrefix + r.GitLab})
+		case r.GitLabUser != "":
+			out = append(out, rule{kind: "gitlab_user", value: r.GitLabUser})
+		case r.Gitea != "":
+			out = append(out, rule{kind: "group", value: GiteaGroupPrefix + r.Gitea})
+		case r.GiteaUser != "":
+			out = append(out, rule{kind: "gitea_user", value: r.GiteaUser})
 		case r.Email != "":
 			out = append(out, rule{kind: "email", value: r.Email})
 		case r.Domain != "":
@@ -400,10 +409,15 @@ func (p *Policy) GitHubTeamRules(org string) []string {
 }
 
 // AllowsCommenterUnlock checks an "atlantis unlock" comment: the commenter
-// is matched by VCS login and "github:org/team" groups. It reports whether
-// the comment may unlock, and which role unlocking needs in the repo.
-func (p *Policy) AllowsCommenterUnlock(repoID, login string, groups []string) (bool, string) {
-	s := Subject{GitHubLogin: login, Groups: groups}
+// is matched by their login on the VCS of kind vcsKind (github, gitlab, or
+// gitea) and by groups with that VCS's prefix, such as "github:org/team".
+// Groups of another kind are ignored. It reports whether the comment may
+// unlock, and which role unlocking needs in the repo.
+func (p *Policy) AllowsCommenterUnlock(repoID, vcsKind, login string, groups []string) (bool, string) {
+	s := Subject{Login: login, LoginKind: vcsKind, Groups: withoutForeignVCSGroups(groups, vcsKind)}
+	if !slices.Contains(vcsKinds, vcsKind) {
+		s.Login, s.LoginKind = "", ""
+	}
 	return p.Allows(s, RoleNone, ActionUnlock, repoID), p.Requires(ActionUnlock, repoID).String()
 }
 

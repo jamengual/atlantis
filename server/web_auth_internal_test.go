@@ -58,6 +58,24 @@ func TestNewWebAuth(t *testing.T) {
 	_, err = webAuthFor(both, public, logger)
 	ErrContains(t, "web-google-allowed-domains", err)
 
+	vcs := UserConfig{WebSSOProviders: []string{"github", "gitlab", "gitea"}, WebSessionSecrets: []string{testSessionSecret},
+		WebGitHubClientID: "gh", WebGitHubClientSecret: "s", WebGitHubAllowedOrgs: []string{"acme"},
+		WebGitLabClientID: "gl", WebGitLabClientSecret: "s", WebGitLabAllowedGroups: []string{"acme"}, GitlabHostname: "gitlab.acme.internal",
+		WebGiteaClientID: "gt", WebGiteaClientSecret: "s", WebGiteaAllowedOrgs: []string{"acme"}, GiteaBaseURL: "https://gitea.acme.internal",
+		WebRoleViewers: []string{"gitlab:acme", "gitea:acme", "github:acme"}}
+	m, err = webAuthFor(vcs, public, logger)
+	Ok(t, err)
+	Equals(t, 3, len(m.Providers()))
+	Equals(t, "GitLab", m.Providers()[1].Name)
+	Equals(t, "gitea", m.Providers()[2].ID)
+	vcs.WebGitLabAllowedGroups = nil
+	_, err = webAuthFor(vcs, public, logger)
+	ErrContains(t, "web-gitlab-allowed-groups", err)
+	vcs.WebGitLabAllowedGroups = []string{"acme"}
+	vcs.WebGiteaClientSecret = ""
+	_, err = webAuthFor(vcs, public, logger)
+	ErrContains(t, "web-gitea-client-secret", err)
+
 	proxy := UserConfig{WebProxyAuth: "header", WebProxyUserHeader: "X-User", WebProxyTrustedCIDRs: []string{"10.0.0.0/8"}, WebRoleViewers: []string{"*"}}
 	m, err = webAuthFor(proxy, public, logger)
 	Ok(t, err)

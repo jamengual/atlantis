@@ -295,10 +295,11 @@ type CommentAccessChecker interface {
 	EnforceInPRComments() bool
 	// GitHubTeamRules lists the team slugs the policy names for an org.
 	GitHubTeamRules(org string) []string
-	// AllowsCommenterUnlock reports whether a commenter, identified by VCS
-	// login and "github:org/team" groups, may unlock projects in the repo,
-	// and which role unlocking needs there.
-	AllowsCommenterUnlock(repoID string, login string, groups []string) (bool, string)
+	// AllowsCommenterUnlock reports whether a commenter, identified by their
+	// login on the VCS of kind vcsKind (github, gitlab, or gitea) and groups
+	// such as "github:org/team", may unlock projects in the repo, and which
+	// role unlocking needs there.
+	AllowsCommenterUnlock(repoID, vcsKind, login string, groups []string) (bool, string)
 }
 
 // commenterMayUnlock applies the access policy to an "atlantis unlock"
@@ -317,7 +318,11 @@ func (c *DefaultCommandRunner) commenterMayUnlock(logger logging.SimpleLogging, 
 	for _, t := range user.Teams {
 		member[strings.ToLower(t)] = true
 	}
+	kind := commentVCSKind(repo.VCSHost.Type)
 	for _, ruled := range c.CommentAccess.GitHubTeamRules(repo.Owner) {
+		if kind != "github" {
+			break
+		}
 		if member[strings.ToLower(ruled)] {
 			continue
 		}
@@ -335,10 +340,16 @@ func (c *DefaultCommandRunner) commenterMayUnlock(logger logging.SimpleLogging, 
 	}
 	groups := make([]string, 0, len(member))
 	for t := range member {
-		groups = append(groups, "github:"+repo.Owner+"/"+t)
+		switch kind {
+		case "github":
+			groups = append(groups, "github:"+repo.Owner+"/"+t)
+		case "gitlab":
+			// GitLab reports the full paths of the configured groups.
+			groups = append(groups, "gitlab:"+t)
+		}
 	}
 	repoID := repo.VCSHost.Hostname + "/" + repo.FullName
-	allowed, need := c.CommentAccess.AllowsCommenterUnlock(repoID, user.Username, groups)
+	allowed, need := c.CommentAccess.AllowsCommenterUnlock(repoID, kind, user.Username, groups)
 	if allowed {
 		return true
 	}
@@ -845,3 +856,18 @@ func (c *DefaultCommandRunner) logPanics(baseRepo models.Repo, pullNum int, logg
 }
 
 var automergeComment = `Automatically merging because all plans have been successfully applied.`
+
+// commentVCSKind names the VCS the access policy matches commenters on, or ""
+// for a VCS people can't sign in to the web UI with, whose commenters are then
+// matched by neither login nor groups.
+func commentVCSKind(t models.VCSHostType) string {
+	switch t {
+	case models.Github:
+		return "github"
+	case models.Gitlab:
+		return "gitlab"
+	case models.Gitea:
+		return "gitea"
+	}
+	return ""
+}

@@ -144,8 +144,30 @@ func newWebAuthManager(c UserConfig, publicURL *url.URL, logger logging.SimpleLo
 				return nil, fmt.Errorf("web-sso-providers github: %w; set web-github-client-id and web-github-client-secret", err)
 			}
 			cfg.Providers = append(cfg.Providers, p)
+		case "gitlab":
+			p, err := webauth.NewGitLabProvider(webauth.GitLabConfig{
+				ClientID:      c.WebGitLabClientID,
+				ClientSecret:  c.WebGitLabClientSecret,
+				Hostname:      c.GitlabHostname,
+				AllowedGroups: c.WebGitLabAllowedGroups,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("web-sso-providers gitlab: %w; set web-gitlab-client-id, web-gitlab-client-secret, and web-gitlab-allowed-groups", err)
+			}
+			cfg.Providers = append(cfg.Providers, p)
+		case "gitea":
+			p, err := webauth.NewGiteaProvider(webauth.GiteaConfig{
+				ClientID:     c.WebGiteaClientID,
+				ClientSecret: c.WebGiteaClientSecret,
+				BaseURL:      c.GiteaBaseURL,
+				AllowedOrgs:  c.WebGiteaAllowedOrgs,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("web-sso-providers gitea: %w; set web-gitea-client-id, web-gitea-client-secret, and web-gitea-allowed-orgs", err)
+			}
+			cfg.Providers = append(cfg.Providers, p)
 		default:
-			return nil, fmt.Errorf("web-sso-providers: unknown provider %q; use oidc, google, or github", name)
+			return nil, fmt.Errorf("web-sso-providers: unknown provider %q; use github, gitlab, gitea, oidc, or google", name)
 		}
 	}
 	m, err := webauth.NewManager(cfg)

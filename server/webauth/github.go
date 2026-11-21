@@ -86,7 +86,7 @@ func NewGitHubProvider(cfg GitHubConfig) (*GitHubProvider, error) {
 // Hostname is the GitHub host people sign in to, such as github.com.
 func (p *GitHubProvider) Hostname() string { return p.host }
 
-func (p *GitHubProvider) ID() string   { return "github" }
+func (p *GitHubProvider) ID() string   { return VCSGitHub }
 func (p *GitHubProvider) Name() string { return "GitHub" }
 
 func (p *GitHubProvider) oauth2Config(redirectURL string) *oauth2.Config {
@@ -141,7 +141,7 @@ func (p *GitHubProvider) Exchange(ctx context.Context, code, verifier, _, redire
 	if err := p.get(ctx, client, "/user", &user); err != nil {
 		return Identity{}, err
 	}
-	id := Identity{Subject: "github:" + strconv.FormatInt(user.ID, 10), Name: user.Login, Login: user.Login}
+	id := Identity{Subject: "github:" + strconv.FormatInt(user.ID, 10), Name: user.Login, Login: user.Login, LoginKind: VCSGitHub}
 	if user.Name != "" {
 		id.Name = user.Name
 	}

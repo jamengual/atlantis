@@ -34,9 +34,15 @@ type AccessRule struct {
 	Group      string
 	GitHub     string
 	GitHubUser string
-	Email      string
-	Domain     string
-	Everyone   bool
+	// GitLab is a GitLab group path, such as "acme/platform".
+	GitLab     string
+	GitLabUser string
+	// Gitea is a Gitea organization or "org/team".
+	Gitea     string
+	GiteaUser string
+	Email     string
+	Domain    string
+	Everyone  bool
 }
 
 // AccessPermissions names the role each action needs. Empty means the

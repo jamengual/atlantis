@@ -234,14 +234,16 @@ Web UI sign-in replaces basic auth for the pages at `/ui` with your identity pro
 | Operator | Also discard plans, unlock projects, stop running jobs, and approve failing policies they own |
 | Admin | Also start and end maintenance windows, and lock and unlock applies for every repository |
 
-Roles come from [`--web-role-admins`](server-configuration.md#web-role-admins), [`--web-role-operators`](server-configuration.md#web-role-operators), and [`--web-role-viewers`](server-configuration.md#web-role-viewers). Each rule is `group:NAME` (or a bare `NAME`) for your identity provider's groups, `github:ORG` or `github:ORG/TEAM` for GitHub, `email:ADDRESS`, `domain:example.com`, or `*` for everyone who signed in. Email and domain rules only match emails the provider marks as verified. The highest matching role wins. People who match no rule are turned away unless you set [`--web-role-default`](server-configuration.md#web-role-default). Atlantis refuses to start with sign-in enabled and no role rules.
+Have people sign in with the VCS they already use for pull requests: [GitHub](#github), [GitLab](#gitlab), or [Gitea](#gitea). They're usually signed in to it already, often through your company's single sign-on, so signing in to Atlantis takes one click. Roles then follow the organizations, teams, and groups you already manage there, and the same rules can check `atlantis unlock` comments. Use [Microsoft Entra ID](#microsoft-entra-id) for Azure DevOps, whose users are Entra ID users, and [Google Workspace](#google-workspace) or [another OIDC provider](#okta-keycloak-auth0-amazon-cognito-and-dex) when people don't share a VCS.
+
+Roles come from [`--web-role-admins`](server-configuration.md#web-role-admins), [`--web-role-operators`](server-configuration.md#web-role-operators), and [`--web-role-viewers`](server-configuration.md#web-role-viewers). Each rule is `group:NAME` (or a bare `NAME`) for your identity provider's groups, `github:ORG` or `github:ORG/TEAM` for GitHub, `gitlab:GROUP/SUBGROUP` for GitLab, `gitea:ORG` or `gitea:ORG/TEAM` for Gitea, `email:ADDRESS`, `domain:example.com`, or `*` for everyone who signed in. Email and domain rules only match emails the provider marks as verified. The highest matching role wins. People who match no rule are turned away unless you set [`--web-role-default`](server-configuration.md#web-role-default). Atlantis refuses to start with sign-in enabled and no role rules.
 
 There are two ways to sign in:
 
-- **Sign-in pages.** Atlantis redirects to an OpenID Connect provider or GitHub, using the authorization code flow with PKCE. Sessions are encrypted cookies, so any replica can serve any request without sticky sessions. Give every replica the same [`--web-session-secrets`](server-configuration.md#web-session-secrets).
+- **Sign-in pages.** Atlantis redirects to GitHub, GitLab, Gitea, or an OpenID Connect provider, using the authorization code flow with PKCE. Sessions are encrypted cookies, so any replica can serve any request without sticky sessions. Give every replica the same [`--web-session-secrets`](server-configuration.md#web-session-secrets).
 - **An authenticating proxy.** A load balancer or proxy in front of Atlantis signs people in and passes their identity on. Atlantis verifies it on every request and shows no sign-in page.
 
-Register `https://ATLANTIS_URL/ui/auth/callback/oidc` or `https://ATLANTIS_URL/ui/auth/callback/github` as the redirect URI, using your [`--atlantis-url`](server-configuration.md#atlantis-url).
+Register `https://ATLANTIS_URL/ui/auth/callback/PROVIDER` as the redirect URI, where `PROVIDER` is `github`, `gitlab`, `gitea`, `oidc`, or `google`, using your [`--atlantis-url`](server-configuration.md#atlantis-url).
 
 #### Access policy in the server-side repo config
 
@@ -257,6 +259,8 @@ access:
     operator:
       - github: acme/sre                # GitHub team (child teams count)
       - github_user: octocat            # one GitHub user
+      - gitlab: acme/platform           # GitLab group (and its subgroups)
+      - gitlab_user: ana                # one GitLab user
     viewer:
       - domain: acme.com
   default: none                         # anyone else is turned away
@@ -284,15 +288,60 @@ repos:
           - group: data-eng             # data-eng can unlock this repo only
 ```
 
-- Each rule matches exactly one of `group`, `github` (`ORG` or `ORG/TEAM`), `github_user`, `email`, `domain`, or `everyone: true`.
+- Each rule matches exactly one of `group`, `github` (`ORG` or `ORG/TEAM`), `github_user`, `gitlab` (a group path), `gitlab_user`, `gitea` (`ORG` or `ORG/TEAM`), `gitea_user`, `email`, `domain`, or `everyone: true`. A `*_user` rule only matches someone signed in with that VCS, so `octocat` on GitHub and `octocat` on GitLab are different people.
 - A `repos` entry can grant extra roles for matching repositories and require a different role to unlock, to stop jobs, or to approve policies there. Viewing, maintenance windows, and the apply lock cover the whole server, so they are set only at the top level. When several entries match, the last one that sets a requirement wins, as with other repo settings.
-- With `enforce_in_pr_comments: true`, an `atlantis unlock` comment is checked against the same unlock rule, matching the commenter's GitHub user and teams. Identity provider groups and emails don't apply to comments.
+- With `enforce_in_pr_comments: true`, an `atlantis unlock` comment is checked against the same unlock rule, matching the commenter's user on the pull request's VCS: `github_user` and GitHub teams, `gitlab_user` and the GitLab groups in [`--gitlab-group-allowlist`](server-configuration.md#gitlab-group-allowlist), or `gitea_user`. Identity provider groups and emails don't apply to comments, and on Bitbucket and Azure DevOps only `everyone: true` rules do.
 - When sign-in is on, the existing UI's pages redirect to the new UI, and its unlock and apply lock actions follow this policy too.
 - The **Access** page in the UI shows the policy in plain words and what you can do in each repository. Atlantis checks the policy at startup and refuses to start with mistakes such as a rule with two attributes or an unknown role.
 
+#### GitHub
+
+Create a GitHub OAuth app, or use a GitHub App with user authorization, with the callback URL. [`--web-github-allowed-orgs`](server-configuration.md#web-github-allowed-orgs) is required, because anyone can create a GitHub account. Organizations become groups named `github:ORG` and teams become `github:ORG/TEAM`; a child team's members also count as members of its parent team. The `github:` prefix keeps a GitHub organization from matching a group of the same name from another provider. GitHub Enterprise uses [`--gh-hostname`](server-configuration.md#gh-hostname).
+
+```sh
+ATLANTIS_WEB_SSO_PROVIDERS=github
+ATLANTIS_WEB_GITHUB_CLIENT_ID=...
+ATLANTIS_WEB_GITHUB_CLIENT_SECRET=...
+ATLANTIS_WEB_GITHUB_ALLOWED_ORGS=acme
+ATLANTIS_WEB_ROLE_ADMINS=github:acme/platform
+ATLANTIS_WEB_ROLE_OPERATORS=github:acme/sre
+ATLANTIS_WEB_ROLE_VIEWERS=github:acme
+```
+
+`--web-sso-providers=github,oidc` shows both buttons, for example for contractors who aren't in your GitHub organization.
+
+If your GitHub organization enforces SAML single sign-on, GitHub asks people to authorize Atlantis for the organization during sign-in. Until they do, GitHub hides the organization's teams from Atlantis and they get no team roles.
+
+#### GitLab
+
+Create a GitLab application, at the instance, group, or user level, with the redirect URI and the `openid`, `profile`, and `email` scopes. [`--web-gitlab-allowed-groups`](server-configuration.md#web-gitlab-allowed-groups) is required, because anyone can create a GitLab account. Groups become `gitlab:FULL/PATH`. GitLab lists every group a person can access, so a member of `acme` is also in `gitlab:acme/platform`. Self-managed GitLab uses [`--gitlab-hostname`](server-configuration.md#gitlab-hostname).
+
+```sh
+ATLANTIS_WEB_SSO_PROVIDERS=gitlab
+ATLANTIS_WEB_GITLAB_CLIENT_ID=...
+ATLANTIS_WEB_GITLAB_CLIENT_SECRET=...
+ATLANTIS_WEB_GITLAB_ALLOWED_GROUPS=acme
+ATLANTIS_WEB_ROLE_ADMINS=gitlab:acme/platform
+ATLANTIS_WEB_ROLE_OPERATORS=gitlab:acme/sre
+ATLANTIS_WEB_ROLE_VIEWERS=gitlab:acme
+```
+
+#### Gitea
+
+Create an OAuth2 application in Gitea or Forgejo with the redirect URI. [`--web-gitea-allowed-orgs`](server-configuration.md#web-gitea-allowed-orgs) is required. Organizations become `gitea:ORG` and teams `gitea:ORG/TEAM`. Atlantis signs in on [`--gitea-base-url`](server-configuration.md#gitea-base-url).
+
+```sh
+ATLANTIS_WEB_SSO_PROVIDERS=gitea
+ATLANTIS_WEB_GITEA_CLIENT_ID=...
+ATLANTIS_WEB_GITEA_CLIENT_SECRET=...
+ATLANTIS_WEB_GITEA_ALLOWED_ORGS=acme
+ATLANTIS_WEB_ROLE_ADMINS=gitea:acme/owners
+ATLANTIS_WEB_ROLE_VIEWERS=gitea:acme
+```
+
 #### Microsoft Entra ID
 
-Register an application, add the redirect URI as a web platform, and create a client secret. Define app roles such as `atlantis-admins` and `atlantis-operators`, assign them to groups, and read them from the `roles` claim. App roles avoid Entra ID's group limit: when a user belongs to more than 200 groups, Entra ID leaves groups out of the token, and Atlantis turns the sign-in away with an explanation rather than guessing.
+Use Entra ID when your repositories are on Azure DevOps, because Azure DevOps users are Entra ID users. Register an application, add the redirect URI as a web platform, and create a client secret. Define app roles such as `atlantis-admins` and `atlantis-operators`, assign them to groups, and read them from the `roles` claim. App roles avoid Entra ID's group limit: when a user belongs to more than 200 groups, Entra ID leaves groups out of the token, and Atlantis turns the sign-in away with an explanation rather than guessing.
 
 ```sh
 ATLANTIS_EXPERIMENTS=web-ui
@@ -324,25 +373,9 @@ ATLANTIS_WEB_ROLE_VIEWERS=domain:acme.com
 
 Google doesn't include groups in tokens, so grant roles by domain or email. For Google group membership, put [Dex](https://dexidp.io/docs/connectors/google/) in between or use [Identity-Aware Proxy](#google-cloud-identity-aware-proxy).
 
-#### Okta, Keycloak, Auth0, GitLab, Amazon Cognito, and Dex
+#### Okta, Keycloak, Auth0, Amazon Cognito, and Dex
 
-Use the provider's issuer URL and configure it to send groups. Okta needs a groups claim on the authorization server and the `groups` scope. Keycloak needs a group membership mapper. Auth0 needs an Action that adds a groups claim, and then [`--web-oidc-groups-claims`](server-configuration.md#web-oidc-groups-claims) set to that claim's name. GitLab reports groups from its userinfo endpoint, which Atlantis reads when the ID token has none. Cognito puts groups in `cognito:groups`.
-
-#### GitHub
-
-Create a GitHub OAuth app, or use a GitHub App with user authorization, with the callback URL. [`--web-github-allowed-orgs`](server-configuration.md#web-github-allowed-orgs) is required, because anyone can create a GitHub account. Organizations become groups named `github:ORG` and teams become `github:ORG/TEAM`; a child team's members also count as members of its parent team. The `github:` prefix keeps a GitHub organization from matching a group of the same name from another provider. GitHub Enterprise uses [`--gh-hostname`](server-configuration.md#gh-hostname).
-
-```sh
-ATLANTIS_WEB_SSO_PROVIDERS=github
-ATLANTIS_WEB_GITHUB_CLIENT_ID=...
-ATLANTIS_WEB_GITHUB_CLIENT_SECRET=...
-ATLANTIS_WEB_GITHUB_ALLOWED_ORGS=acme
-ATLANTIS_WEB_ROLE_ADMINS=github:acme/platform
-ATLANTIS_WEB_ROLE_OPERATORS=github:acme/sre
-ATLANTIS_WEB_ROLE_VIEWERS=github:acme
-```
-
-`--web-sso-providers=oidc,github` shows both buttons.
+Use the provider's issuer URL and configure it to send groups. Okta needs a groups claim on the authorization server and the `groups` scope. Keycloak needs a group membership mapper. Auth0 needs an Action that adds a groups claim, and then [`--web-oidc-groups-claims`](server-configuration.md#web-oidc-groups-claims) set to that claim's name. Cognito puts groups in `cognito:groups`.
 
 #### AWS Application Load Balancer and IAM Identity Center
 

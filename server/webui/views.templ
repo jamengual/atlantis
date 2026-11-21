@@ -91,6 +91,10 @@ func signedInWith(p *webauth.Principal) string {
 		return "Single sign-on · " + p.Role.String()
 	case p.Provider == "github":
 		return "GitHub · " + p.Role.String()
+	case p.Provider == "gitlab":
+		return "GitLab · " + p.Role.String()
+	case p.Provider == "gitea":
+		return "Gitea · " + p.Role.String()
 	case p.Provider == "google":
 		return "Google · " + p.Role.String()
 	case p.Provider == "proxy":

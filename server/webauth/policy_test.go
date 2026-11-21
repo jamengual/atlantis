@@ -58,7 +58,7 @@ func TestPolicy_RolesAndPermissions(t *testing.T) {
 		{"admin unlocks prod", admin, webauth.ActionUnlock, "github.com/acme/prod-network", true},
 		{"operator can't lock applies", sre, webauth.ActionLockApplies, "", false},
 		{"admin locks applies", admin, webauth.ActionLockApplies, "", true},
-		{"github user rule", webauth.Subject{GitHubLogin: "OctoCat"}, webauth.ActionUnlock, "github.com/acme/infra", true},
+		{"github user rule", webauth.Subject{Login: "OctoCat", LoginKind: "github"}, webauth.ActionUnlock, "github.com/acme/infra", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

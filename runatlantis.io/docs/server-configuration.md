@@ -1765,6 +1765,36 @@ ATLANTIS_WEB_BASIC_AUTH=true
 
 Enable Basic Authentication on the Atlantis web service.
 
+### `--web-gitea-allowed-orgs` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-gitea-allowed-orgs=acme
+# or
+ATLANTIS_WEB_GITEA_ALLOWED_ORGS=acme
+```
+
+Only members of these Gitea organizations can sign in with Gitea. Required for Gitea sign-in, because people can usually register their own Gitea accounts. Organizations become groups named `gitea:ORG`, and teams become `gitea:ORG/TEAM`. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-gitea-client-id` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-gitea-client-id=0123abcd-0123-abcd-0123-0123456789ab
+# or
+ATLANTIS_WEB_GITEA_CLIENT_ID=0123abcd-0123-abcd-0123-0123456789ab
+```
+
+Client ID of the Gitea or Forgejo OAuth2 application used for web UI sign-in. Register `https://ATLANTIS_URL/ui/auth/callback/gitea` as its redirect URI. Signs in on [`--gitea-base-url`](#gitea-base-url). See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-gitea-client-secret` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-gitea-client-secret=SECRET
+# or
+ATLANTIS_WEB_GITEA_CLIENT_SECRET=SECRET
+```
+
+Client secret for Gitea sign-in. Set it with the environment variable. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
 ### `--web-github-allowed-orgs` <Badge text="Experimental" type="warning"/>
 
 ```bash
@@ -1794,6 +1824,36 @@ ATLANTIS_WEB_GITHUB_CLIENT_SECRET=SECRET
 ```
 
 Client secret for GitHub sign-in. Set it with the environment variable. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-gitlab-allowed-groups` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-gitlab-allowed-groups=acme
+# or
+ATLANTIS_WEB_GITLAB_ALLOWED_GROUPS=acme
+```
+
+Only members of these GitLab groups, or of their subgroups, can sign in with GitLab, such as `acme` or `acme/platform`. Required for GitLab sign-in, because anyone can create a GitLab account. Groups become `gitlab:FULL/PATH`, and GitLab lists every group a person can access, including the subgroups of groups they belong to. See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-gitlab-client-id` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-gitlab-client-id=0123456789abcdef
+# or
+ATLANTIS_WEB_GITLAB_CLIENT_ID=0123456789abcdef
+```
+
+Application ID of the GitLab application used for web UI sign-in, with the `openid`, `profile`, and `email` scopes. Register `https://ATLANTIS_URL/ui/auth/callback/gitlab` as its redirect URI. Signs in on [`--gitlab-hostname`](#gitlab-hostname). See [web UI sign-in](experiments.md#web-ui-sign-in).
+
+### `--web-gitlab-client-secret` <Badge text="Experimental" type="warning"/>
+
+```bash
+atlantis server --web-gitlab-client-secret=SECRET
+# or
+ATLANTIS_WEB_GITLAB_CLIENT_SECRET=SECRET
+```
+
+Secret of the GitLab application used for web UI sign-in. Set it with the environment variable. See [web UI sign-in](experiments.md#web-ui-sign-in).
 
 ### `--web-google-allowed-domains` <Badge text="Experimental" type="warning"/>
 
@@ -1983,7 +2043,7 @@ atlantis server --web-role-admins="group:platform-admins,email:lead@acme.com"
 ATLANTIS_WEB_ROLE_ADMINS="group:platform-admins,email:lead@acme.com"
 ```
 
-Who gets the web UI admin role. Each rule is `group:NAME` (or a bare `NAME`), `github:ORG` or `github:ORG/TEAM`, `email:ADDRESS`, `domain:example.com`, or `*` for everyone signed in. Emails and domains only match verified emails. Admins can do everything operators can, and lock or unlock applies for every repository. See [web UI sign-in](experiments.md#web-ui-sign-in).
+Who gets the web UI admin role. Each rule is `group:NAME` (or a bare `NAME`), `github:ORG` or `github:ORG/TEAM`, `gitlab:GROUP/SUBGROUP`, `gitea:ORG` or `gitea:ORG/TEAM`, `email:ADDRESS`, `domain:example.com`, or `*` for everyone signed in. Emails and domains only match verified emails. Admins can do everything operators can, and lock or unlock applies for every repository. See [web UI sign-in](experiments.md#web-ui-sign-in).
 
 ### `--web-role-default` <Badge text="Experimental" type="warning"/>
 
@@ -2038,12 +2098,12 @@ Secrets that encrypt web UI session cookies, separated by commas. Each must be a
 ### `--web-sso-providers` <Badge text="Experimental" type="warning"/>
 
 ```bash
-atlantis server --web-sso-providers=oidc,github
+atlantis server --web-sso-providers=github,oidc
 # or
-ATLANTIS_WEB_SSO_PROVIDERS=oidc,github
+ATLANTIS_WEB_SSO_PROVIDERS=github,oidc
 ```
 
-Sign-in providers for the web UI at `/ui`, separated by commas: `oidc`, `google`, and `github`. Requires the `web-ui` experiment, [`--web-session-secrets`](#web-session-secrets), and at least one role rule. Can't be combined with [`--web-proxy-auth`](#web-proxy-auth). See [web UI sign-in](experiments.md#web-ui-sign-in).
+Sign-in providers for the web UI at `/ui`, separated by commas: `github`, `gitlab`, `gitea`, `oidc`, and `google`. Signing in with the VCS people already use lets roles follow its teams and groups. Use `oidc` for Azure DevOps, whose users sign in with Microsoft Entra ID. Requires the `web-ui` experiment, [`--web-session-secrets`](#web-session-secrets), and at least one role rule. Can't be combined with [`--web-proxy-auth`](#web-proxy-auth). See [web UI sign-in](experiments.md#web-ui-sign-in).
 
 ### `--web-username`
 

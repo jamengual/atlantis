@@ -19,6 +19,7 @@ import (
 //	      - email: lead@acme.com
 //	    operator:
 //	      - github: acme/sre
+//	      - gitlab: acme/platform
 //	    viewer:
 //	      - domain: acme.com
 //	  default: none
@@ -55,6 +56,10 @@ type AccessRule struct {
 	Group      string `yaml:"group,omitempty" json:"group,omitempty"`
 	GitHub     string `yaml:"github,omitempty" json:"github,omitempty"`
 	GitHubUser string `yaml:"github_user,omitempty" json:"github_user,omitempty"`
+	GitLab     string `yaml:"gitlab,omitempty" json:"gitlab,omitempty"`
+	GitLabUser string `yaml:"gitlab_user,omitempty" json:"gitlab_user,omitempty"`
+	Gitea      string `yaml:"gitea,omitempty" json:"gitea,omitempty"`
+	GiteaUser  string `yaml:"gitea_user,omitempty" json:"gitea_user,omitempty"`
 	Email      string `yaml:"email,omitempty" json:"email,omitempty"`
 	Domain     string `yaml:"domain,omitempty" json:"domain,omitempty"`
 	Everyone   bool   `yaml:"everyone,omitempty" json:"everyone,omitempty"`
@@ -87,7 +92,7 @@ func validRoleName(where, value string) error {
 
 func (r AccessRule) validate(where string) error {
 	set := 0
-	for _, v := range []string{r.Group, r.GitHub, r.GitHubUser, r.Email, r.Domain} {
+	for _, v := range []string{r.Group, r.GitHub, r.GitHubUser, r.GitLab, r.GitLabUser, r.Gitea, r.GiteaUser, r.Email, r.Domain} {
 		if strings.TrimSpace(v) != "" {
 			set++
 		}
@@ -96,7 +101,7 @@ func (r AccessRule) validate(where string) error {
 		set++
 	}
 	if set != 1 {
-		return fmt.Errorf("%s: each rule needs exactly one of group, github, github_user, email, domain, or everyone: true", where)
+		return fmt.Errorf("%s: each rule needs exactly one of group, github, github_user, gitlab, gitlab_user, gitea, gitea_user, email, domain, or everyone: true", where)
 	}
 	if r.Email != "" && !strings.Contains(r.Email, "@") {
 		return fmt.Errorf("%s: email %q is not an email address", where, r.Email)
@@ -176,6 +181,10 @@ func (r AccessRoles) toValid() valid.AccessRoles {
 				Group:      strings.TrimSpace(x.Group),
 				GitHub:     strings.TrimSpace(x.GitHub),
 				GitHubUser: strings.TrimSpace(x.GitHubUser),
+				GitLab:     strings.Trim(strings.TrimSpace(x.GitLab), "/"),
+				GitLabUser: strings.TrimSpace(x.GitLabUser),
+				Gitea:      strings.TrimSpace(x.Gitea),
+				GiteaUser:  strings.TrimSpace(x.GiteaUser),
 				Email:      strings.TrimSpace(x.Email),
 				Domain:     strings.TrimSpace(x.Domain),
 				Everyone:   x.Everyone,

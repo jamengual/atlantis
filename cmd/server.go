@@ -181,6 +181,12 @@ const (
 	WebGoogleClientIDFlag            = "web-google-client-id"
 	WebGoogleClientSecretFlag        = "web-google-client-secret" // #nosec G101 -- flag name, not a credential
 	WebGoogleAllowedDomainsFlag      = "web-google-allowed-domains"
+	WebGitLabClientIDFlag            = "web-gitlab-client-id"
+	WebGitLabClientSecretFlag        = "web-gitlab-client-secret" // #nosec G101 -- flag name, not a credential
+	WebGitLabAllowedGroupsFlag       = "web-gitlab-allowed-groups"
+	WebGiteaClientIDFlag             = "web-gitea-client-id"
+	WebGiteaClientSecretFlag         = "web-gitea-client-secret" // #nosec G101 -- flag name, not a credential
+	WebGiteaAllowedOrgsFlag          = "web-gitea-allowed-orgs"
 	WebProxyAuthFlag                 = "web-proxy-auth"
 	WebProxyALBArnFlag               = "web-proxy-alb-arn"
 	WebProxyIAPAudienceFlag          = "web-proxy-iap-audience"
@@ -241,7 +247,7 @@ const (
 
 var stringSliceFlags = map[string]stringSliceFlag{
 	WebSSOProvidersFlag: {
-		description: "Experimental. Sign-in providers for the web UI at /ui, separated by commas: oidc, google, github. Requires the web-ui experiment and --web-session-secrets.",
+		description: "Experimental. Sign-in providers for the web UI at /ui, separated by commas: github, gitlab, gitea, oidc, google. Signing in with the VCS people already use lets roles follow its teams and groups. Requires the web-ui experiment and --web-session-secrets.",
 	},
 	WebSessionSecretsFlag: {
 		description: "Experimental. Secrets that encrypt web UI session cookies, separated by commas, each at least 32 random characters. The first encrypts; all decrypt, so add a new secret in front to rotate. Every replica needs the same secrets. Set with ATLANTIS_WEB_SESSION_SECRETS.",
@@ -263,11 +269,17 @@ var stringSliceFlags = map[string]stringSliceFlag{
 	WebGoogleAllowedDomainsFlag: {
 		description: "Experimental. Google Workspace domains allowed to sign in with Google, such as acme.com. Required for Google sign-in.",
 	},
+	WebGitLabAllowedGroupsFlag: {
+		description: "Experimental. Only members of these GitLab groups, or their subgroups, can sign in with GitLab, such as acme or acme/platform. Required for GitLab sign-in. In role rules, GitLab groups are gitlab:GROUP/SUBGROUP.",
+	},
+	WebGiteaAllowedOrgsFlag: {
+		description: "Experimental. Only members of these Gitea organizations can sign in with Gitea. Required for Gitea sign-in. In role rules, Gitea groups are gitea:ORG and gitea:ORG/TEAM.",
+	},
 	WebProxyTrustedCIDRsFlag: {
 		description: "Experimental. Networks allowed to send identity headers when --web-proxy-auth=header, such as 10.0.0.0/8. The connection address is checked, not X-Forwarded-For.",
 	},
 	WebRoleAdminsFlag: {
-		description: "Experimental. Who gets the web UI admin role: group:NAME (or a bare NAME), github:ORG or github:ORG/TEAM, email:ADDRESS, domain:example.com, or * for everyone signed in. Admins can also lock and unlock applies.",
+		description: "Experimental. Who gets the web UI admin role: group:NAME (or a bare NAME), github:ORG or github:ORG/TEAM, gitlab:GROUP/SUBGROUP, gitea:ORG or gitea:ORG/TEAM, email:ADDRESS, domain:example.com, or * for everyone signed in. Admins can also lock and unlock applies.",
 	},
 	WebRoleOperatorsFlag: {
 		description: "Experimental. Who gets the web UI operator role, using the same rules as --web-role-admins. Operators can also discard plans and unlock projects.",
@@ -309,6 +321,18 @@ var stringFlags = map[string]stringFlag{
 	},
 	WebGoogleClientSecretFlag: {
 		description: "Experimental. Client secret for Google sign-in. Set with ATLANTIS_WEB_GOOGLE_CLIENT_SECRET.",
+	},
+	WebGitLabClientIDFlag: {
+		description: "Experimental. Application ID of the GitLab application used for web UI sign-in, on --gitlab-hostname. Requires --web-gitlab-allowed-groups.",
+	},
+	WebGitLabClientSecretFlag: {
+		description: "Experimental. Secret of the GitLab application used for web UI sign-in. Set with ATLANTIS_WEB_GITLAB_CLIENT_SECRET.",
+	},
+	WebGiteaClientIDFlag: {
+		description: "Experimental. Client ID of the Gitea OAuth2 application used for web UI sign-in, on --gitea-base-url. Requires --web-gitea-allowed-orgs.",
+	},
+	WebGiteaClientSecretFlag: {
+		description: "Experimental. Client secret for Gitea sign-in. Set with ATLANTIS_WEB_GITEA_CLIENT_SECRET.",
 	},
 	WebProxyAuthFlag: {
 		description: "Experimental. Take the web UI user from an authenticating proxy instead of a sign-in page: alb, iap, or header. Requires the web-ui experiment.",

@@ -31,6 +31,7 @@ import (
 	"github.com/runatlantis/atlantis/server/events/models/testdata"
 	vcsmocks "github.com/runatlantis/atlantis/server/events/vcs/mocks"
 	. "github.com/runatlantis/atlantis/testing"
+	gitlab "gitlab.com/gitlab-org/api/client-go"
 	"go.uber.org/mock/gomock"
 )
 
@@ -2991,15 +2992,37 @@ func TestRunCommentCommand_VarFileOutsideAllowlistRejectedForEveryCommand(t *tes
 type fakeCommentAccess struct {
 	allow   bool
 	gotRepo string
+	gotKind string
 	gotUser string
 	gotGrps []string
 }
 
 func (f *fakeCommentAccess) EnforceInPRComments() bool       { return true }
 func (f *fakeCommentAccess) GitHubTeamRules(string) []string { return nil }
-func (f *fakeCommentAccess) AllowsCommenterUnlock(repoID, login string, groups []string) (bool, string) {
-	f.gotRepo, f.gotUser, f.gotGrps = repoID, login, groups
+func (f *fakeCommentAccess) AllowsCommenterUnlock(repoID, kind, login string, groups []string) (bool, string) {
+	f.gotRepo, f.gotKind, f.gotUser, f.gotGrps = repoID, kind, login, groups
 	return f.allow, "admin"
+}
+
+// GitLab commenters are matched as GitLab users, with the groups of
+// --gitlab-group-allowlist they belong to.
+func TestRunUnlockCommand_AccessPolicyGitLab(t *testing.T) {
+	vcsClient := setup(t)
+	access := &fakeCommentAccess{allow: true}
+	ch.CommentAccess = access
+	defer func() { ch.CommentAccess = nil }()
+	mr := &gitlab.MergeRequest{}
+	modelPull := models.PullRequest{BaseRepo: testdata.GitlabRepo, State: models.OpenPullState, Num: testdata.Pull.Num}
+	When(gitlabGetter.GetMergeRequest(Any[logging.SimpleLogging](), Eq(testdata.GitlabRepo.FullName), Eq(testdata.Pull.Num))).ThenReturn(mr, nil)
+	When(eventParsing.ParseGitlabMergeRequest(Eq(mr), Eq(testdata.GitlabRepo))).ThenReturn(modelPull)
+	When(vcsClient.GetTeamNamesForUser(Any[logging.SimpleLogging](), Eq(testdata.GitlabRepo), Any[models.User]())).ThenReturn([]string{"acme/platform"}, nil)
+
+	ch.RunCommentCommand(testdata.GitlabRepo, &testdata.GitlabRepo, nil, testdata.User, testdata.Pull.Num,
+		&events.CommentCommand{Name: command.Unlock})
+
+	Equals(t, "gitlab", access.gotKind)
+	Equals(t, testdata.User.Username, access.gotUser)
+	Equals(t, []string{"gitlab:acme/platform"}, access.gotGrps)
 }
 
 func TestRunUnlockCommand_AccessPolicy(t *testing.T) {
@@ -3019,6 +3042,7 @@ func TestRunUnlockCommand_AccessPolicy(t *testing.T) {
 				&events.CommentCommand{Name: command.Unlock})
 
 			Equals(t, testdata.GithubRepo.VCSHost.Hostname+"/"+testdata.GithubRepo.FullName, access.gotRepo)
+			Equals(t, "github", access.gotKind)
 			Equals(t, testdata.User.Username, access.gotUser)
 			Equals(t, []string{"github:" + testdata.GithubRepo.Owner + "/sre"}, access.gotGrps)
 			if allow {

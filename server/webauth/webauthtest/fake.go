@@ -37,6 +37,8 @@ type OIDC struct {
 	Server       *httptest.Server
 	ClientID     string
 	ClientSecret string
+	// IssuerSlash makes the issuer end with a slash, as Gitea's does.
+	IssuerSlash bool
 
 	mu       sync.Mutex
 	claims   map[string]any
@@ -90,10 +92,18 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// Issuer is the issuer URL the provider reports.
+func (f *OIDC) Issuer() string {
+	if f.IssuerSlash {
+		return f.Server.URL + "/"
+	}
+	return f.Server.URL
+}
+
 func (f *OIDC) discovery(w http.ResponseWriter, _ *http.Request) {
 	u := f.Server.URL
 	writeJSON(w, map[string]any{
-		"issuer":                                u,
+		"issuer":                                f.Issuer(),
 		"authorization_endpoint":                u + "/authorize",
 		"token_endpoint":                        u + "/token",
 		"jwks_uri":                              u + "/jwks",
@@ -169,7 +179,7 @@ func (f *OIDC) token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	claims := jwt.MapClaims{"iss": f.Server.URL, "aud": f.ClientID, "iat": now.Unix(), "exp": now.Add(5 * time.Minute).Unix(), "nonce": g.nonce}
+	claims := jwt.MapClaims{"iss": f.Issuer(), "aud": f.ClientID, "iat": now.Unix(), "exp": now.Add(5 * time.Minute).Unix(), "nonce": g.nonce}
 	if tamper {
 		claims["nonce"] = "tampered"
 	}

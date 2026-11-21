@@ -4,11 +4,12 @@
 // Package webauth signs people in to the Atlantis web UI and decides what
 // they may do there.
 //
-// Identity comes from an OpenID Connect provider (Entra ID, Google, Okta,
-// Keycloak, and others), from GitHub, or from an authenticating proxy in
-// front of Atlantis (AWS ALB, Google IAP, or trusted headers). Sessions are
-// encrypted cookies, so any replica can serve any request. Roles come from
-// the user's groups, email, or email domain.
+// Identity comes from the VCS people already use (GitHub, GitLab, or Gitea),
+// from an OpenID Connect provider (Entra ID, Google, Okta, Keycloak, and
+// others), or from an authenticating proxy in front of Atlantis (AWS ALB,
+// Google IAP, or trusted headers). Sessions are encrypted cookies, so any
+// replica can serve any request. Roles come from the user's VCS teams and
+// groups, identity provider groups, VCS username, email, or email domain.
 package webauth
 
 import (
@@ -67,8 +68,10 @@ type Identity struct {
 	// Unverified emails are not used for role matching.
 	EmailVerified bool
 	Groups        []string
-	// Login is the GitHub username, set by the GitHub provider.
-	Login string
+	// Login is the VCS username, set by the GitHub, GitLab, and Gitea
+	// providers, and LoginKind which of them it belongs to.
+	Login     string
+	LoginKind string
 	// GitHubTeams are the "org/team" slugs of the GitHub teams the user is
 	// a direct member of, set by the GitHub provider. Unlike Groups, parent
 	// teams aren't added, because policy owners are matched the way
@@ -86,8 +89,10 @@ type Principal struct {
 	Role Role `json:"role"`
 	// Groups are the user's groups that the access policy mentions.
 	Groups []string `json:"g,omitempty"`
-	// GitHubLogin is set when the user signed in with GitHub.
-	GitHubLogin string `json:"gh,omitempty"`
+	// Login is the VCS username when the user signed in with a VCS, and
+	// LoginKind the VCS: github, gitlab, or gitea.
+	Login     string `json:"lg,omitempty"`
+	LoginKind string `json:"lk,omitempty"`
 	// GitHubTeams are the "org/team" slugs of the GitHub teams the user is
 	// a direct member of that own policy sets. Approving policies from the
 	// web UI matches owners against these, as the comment command does.
@@ -102,7 +107,16 @@ func (p *Principal) AsSubject() Subject {
 	if p == nil {
 		return Subject{}
 	}
-	return Subject{Groups: p.Groups, Email: p.Email, GitHubLogin: p.GitHubLogin}
+	return Subject{Groups: p.Groups, Email: p.Email, Login: p.Login, LoginKind: p.LoginKind}
+}
+
+// GitHubLogin is the GitHub username, or "" when the user didn't sign in
+// with GitHub.
+func (p *Principal) GitHubLogin() string {
+	if p == nil || p.LoginKind != VCSGitHub {
+		return ""
+	}
+	return p.Login
 }
 
 // Can reports whether the principal has at least the given role.

@@ -38,7 +38,7 @@ func (h *Handler) approverFor(r *http.Request, repo Repository) (policyApprover,
 	}
 	p := webauth.FromContext(r.Context())
 	ghHost := h.Auth.GitHubHostname()
-	if p == nil || p.GitHubLogin == "" {
+	if p == nil || p.GitHubLogin() == "" {
 		if ghHost == "" {
 			return policyApprover{}, "Approving policies from the web UI needs GitHub sign-in, so Atlantis can check that you're a policy owner. This Atlantis doesn't offer GitHub sign-in." + instead
 		}
@@ -52,7 +52,7 @@ func (h *Handler) approverFor(r *http.Request, repo Repository) (policyApprover,
 		return policyApprover{}, fmt.Sprintf("You signed in with GitHub at %s, but this repository is on %s, so Atlantis doesn't know your login there.%s", ghHost, host, instead)
 	}
 	org, _, _ := strings.Cut(repo.FullName, "/")
-	a := policyApprover{Login: p.GitHubLogin}
+	a := policyApprover{Login: p.GitHubLogin()}
 	for _, t := range p.GitHubTeams {
 		if o, team, ok := strings.Cut(t, "/"); ok && strings.EqualFold(o, org) {
 			a.Teams = append(a.Teams, team)
